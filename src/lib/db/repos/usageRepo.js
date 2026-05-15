@@ -67,9 +67,9 @@ function aggregateEntryToDay(day, entry) {
     addToCounter(day.byAccount, entry.connectionId, { ...vals, meta: { rawModel: entry.model, provider: entry.provider } });
   }
 
-  const apiKeyVal = entry.apiKey && typeof entry.apiKey === "string" ? entry.apiKey : "local-no-key";
+  const apiKeyVal = entry.apiKeyId && typeof entry.apiKeyId === "string" ? entry.apiKeyId : "local-no-key";
   const akModelKey = `${apiKeyVal}|${entry.model}|${entry.provider || "unknown"}`;
-  addToCounter(day.byApiKey, akModelKey, { ...vals, meta: { rawModel: entry.model, provider: entry.provider, apiKey: entry.apiKey || null } });
+  addToCounter(day.byApiKey, akModelKey, { ...vals, meta: { rawModel: entry.model, provider: entry.provider, apiKeyId: entry.apiKeyId || null } });
 
   const endpoint = entry.endpoint || "Unknown";
   const epKey = `${endpoint}|${entry.model}|${entry.provider || "unknown"}`;
@@ -101,10 +101,10 @@ async function ensureRingInitialized() {
   recentRing.initialized = true;
   try {
     const db = await getAdapter();
-    const rows = db.all(`SELECT timestamp, provider, model, connectionId, apiKey, endpoint, cost, status, tokens FROM usageHistory ORDER BY id DESC LIMIT ?`, [RING_CAP]);
+    const rows = db.all(`SELECT timestamp, provider, model, connectionId, apiKeyId, endpoint, cost, status, tokens FROM usageHistory ORDER BY id DESC LIMIT ?`, [RING_CAP]);
     recentRing.items = rows.reverse().map((r) => ({
       timestamp: r.timestamp, provider: r.provider, model: r.model, connectionId: r.connectionId,
-      apiKey: r.apiKey, endpoint: r.endpoint, cost: r.cost, status: r.status,
+      apiKeyId: r.apiKeyId, endpoint: r.endpoint, cost: r.cost, status: r.status,
       tokens: parseJson(r.tokens, {}),
     }));
   } catch {}
@@ -255,10 +255,15 @@ export async function saveRequestUsage(entry) {
     // better-sqlite3 is sync → no JS yield mid-transaction → no race in same process.
     db.transaction(() => {
       db.run(
-        `INSERT INTO usageHistory(timestamp, provider, model, connectionId, apiKey, endpoint, promptTokens, completionTokens, cost, status, tokens, meta) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO usageHistory(timestamp, provider, model, connectionId, apiKey, apiKeyId, endpoint, promptTokens, completionTokens, cost, status, tokens, meta) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           entry.timestamp, entry.provider || null, entry.model || null,
-          entry.connectionId || null, entry.apiKey || null, entry.endpoint || null,
+          entry.connectionId || null,
+          // Never persist plaintext key. Some legacy callers still pass `apiKey`
+          // — drop it on write.
+          null,
+          entry.apiKeyId || null,
+          entry.endpoint || null,
           promptTokens, completionTokens, entry.cost || 0, entry.status || "ok",
           stringifyJson(tokens), stringifyJson({}),
         ]
@@ -293,17 +298,49 @@ function getLocalDayBounds(date = new Date()) {
   return { start, end };
 }
 
+function getLocalMonthBounds(date = new Date()) {
+  const d = date instanceof Date ? date : new Date(date);
+  const start = new Date(d.getFullYear(), d.getMonth(), 1);
+  const end = new Date(d.getFullYear(), d.getMonth() + 1, 1);
+  return { start, end };
+}
+
 function getNextLocalMidnightIso(date = new Date()) {
   return getLocalDayBounds(date).end.toISOString();
 }
 
-export async function getApiKeyDailyTokenUsage(apiKey, date = new Date()) {
-  if (!apiKey) return { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+export async function getApiKeyDailyTokenUsage(apiKeyId, date = new Date()) {
+  if (!apiKeyId) return { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
   const db = await getAdapter();
   const { start, end } = getLocalDayBounds(date);
   const row = db.get(
-    `SELECT COALESCE(SUM(promptTokens), 0) AS promptTokens, COALESCE(SUM(completionTokens), 0) AS completionTokens FROM usageHistory WHERE apiKey = ? AND timestamp >= ? AND timestamp < ?`,
-    [apiKey, start.toISOString(), end.toISOString()]
+    `SELECT COALESCE(SUM(promptTokens), 0) AS promptTokens, COALESCE(SUM(completionTokens), 0) AS completionTokens FROM usageHistory WHERE apiKeyId = ? AND timestamp >= ? AND timestamp < ?`,
+    [apiKeyId, start.toISOString(), end.toISOString()]
+  );
+  const promptTokens = Number(row?.promptTokens || 0);
+  const completionTokens = Number(row?.completionTokens || 0);
+  return { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens };
+}
+
+export async function getApiKeyMonthlyTokenUsage(apiKeyId, date = new Date()) {
+  if (!apiKeyId) return { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+  const db = await getAdapter();
+  const { start, end } = getLocalMonthBounds(date);
+  const row = db.get(
+    `SELECT COALESCE(SUM(promptTokens), 0) AS promptTokens, COALESCE(SUM(completionTokens), 0) AS completionTokens FROM usageHistory WHERE apiKeyId = ? AND timestamp >= ? AND timestamp < ?`,
+    [apiKeyId, start.toISOString(), end.toISOString()]
+  );
+  const promptTokens = Number(row?.promptTokens || 0);
+  const completionTokens = Number(row?.completionTokens || 0);
+  return { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens };
+}
+
+export async function getApiKeyLifetimeTokenUsage(apiKeyId) {
+  if (!apiKeyId) return { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+  const db = await getAdapter();
+  const row = db.get(
+    `SELECT COALESCE(SUM(promptTokens), 0) AS promptTokens, COALESCE(SUM(completionTokens), 0) AS completionTokens FROM usageHistory WHERE apiKeyId = ?`,
+    [apiKeyId]
   );
   const promptTokens = Number(row?.promptTokens || 0);
   const completionTokens = Number(row?.completionTokens || 0);
@@ -311,9 +348,11 @@ export async function getApiKeyDailyTokenUsage(apiKey, date = new Date()) {
 }
 
 export async function getApiKeyDailyUsageSummary(apiKeyOrRecord, date = new Date()) {
-  const apiKey = typeof apiKeyOrRecord === "string" ? apiKeyOrRecord : apiKeyOrRecord?.key;
+  // Accept both a record object (preferred) and a bare id string for callers
+  // that only have one piece of info handy.
+  const apiKeyId = typeof apiKeyOrRecord === "string" ? apiKeyOrRecord : apiKeyOrRecord?.id;
   const dailyTokenLimit = Number(typeof apiKeyOrRecord === "object" ? apiKeyOrRecord?.dailyTokenLimit || 0 : 0);
-  const usage = await getApiKeyDailyTokenUsage(apiKey, date);
+  const usage = await getApiKeyDailyTokenUsage(apiKeyId, date);
   const isUnlimited = !Number.isFinite(dailyTokenLimit) || dailyTokenLimit <= 0;
   const remainingTokens = isUnlimited ? null : Math.max(0, dailyTokenLimit - usage.totalTokens);
   const usagePercent = isUnlimited ? 0 : Math.min(100, Math.round((usage.totalTokens / dailyTokenLimit) * 100));
@@ -341,11 +380,11 @@ export async function getUsageHistory(filter = {}) {
   if (filter.endDate) { conds.push("timestamp <= ?"); params.push(new Date(filter.endDate).toISOString()); }
 
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
-  const rows = db.all(`SELECT timestamp, provider, model, connectionId, apiKey, endpoint, cost, status, tokens FROM usageHistory ${where} ORDER BY id ASC`, params);
+  const rows = db.all(`SELECT timestamp, provider, model, connectionId, apiKeyId, endpoint, cost, status, tokens FROM usageHistory ${where} ORDER BY id ASC`, params);
 
   return rows.map((r) => ({
     timestamp: r.timestamp, provider: r.provider, model: r.model,
-    connectionId: r.connectionId, apiKey: r.apiKey, endpoint: r.endpoint,
+    connectionId: r.connectionId, apiKeyId: r.apiKeyId, endpoint: r.endpoint,
     cost: r.cost, status: r.status, tokens: parseJson(r.tokens, {}),
   }));
 }
@@ -383,7 +422,7 @@ export async function getUsageStats(period = "all") {
   let allApiKeys = [];
   try { allApiKeys = await getApiKeys(); } catch {}
   const apiKeyMap = {};
-  for (const k of allApiKeys) apiKeyMap[k.key] = { name: k.name, id: k.id, createdAt: k.createdAt };
+  for (const k of allApiKeys) apiKeyMap[k.id] = { name: k.name, id: k.id, createdAt: k.createdAt, keyDisplay: k.keyDisplay };
 
   // recentRequests from live history (last 100 entries enough for 20 deduped)
   const recentRows = db.all(`SELECT timestamp, provider, model, tokens, status FROM usageHistory ORDER BY id DESC LIMIT 100`);
@@ -516,12 +555,12 @@ export async function getUsageStats(period = "all") {
         const rawModel = ak.rawModel || "";
         const provider = ak.provider || "";
         const providerDisplayName = providerNodeNameMap[provider] || provider;
-        const apiKeyVal = ak.apiKey;
-        const keyInfo = apiKeyVal ? apiKeyMap[apiKeyVal] : null;
-        const keyName = keyInfo?.name || (apiKeyVal ? apiKeyVal.slice(0, 8) + "..." : "Local (No API Key)");
-        const apiKeyKey = apiKeyVal || "local-no-key";
+        const apiKeyId = ak.apiKeyId;
+        const keyInfo = apiKeyId ? apiKeyMap[apiKeyId] : null;
+        const keyName = keyInfo?.name || (apiKeyId ? `Key ${apiKeyId.slice(0, 8)}...` : "Local (No API Key)");
+        const apiKeyKey = apiKeyId || "local-no-key";
         if (!stats.byApiKey[akKey]) {
-          stats.byApiKey[akKey] = { requests: 0, promptTokens: 0, completionTokens: 0, cost: 0, rawModel, provider: providerDisplayName, apiKey: apiKeyVal, keyName, apiKeyKey, lastUsed: dateKey };
+          stats.byApiKey[akKey] = { requests: 0, promptTokens: 0, completionTokens: 0, cost: 0, rawModel, provider: providerDisplayName, apiKeyId, keyName, apiKeyKey, lastUsed: dateKey };
         }
         stats.byApiKey[akKey].requests += ak.requests || 0;
         stats.byApiKey[akKey].promptTokens += ak.promptTokens || 0;
@@ -549,7 +588,7 @@ export async function getUsageStats(period = "all") {
     // Overlay precise lastUsed timestamps from history
     const overlayCutoff = maxDays ? Date.now() - maxDays * 86400000 : 0;
     const histRows = db.all(
-      `SELECT timestamp, provider, model, connectionId, apiKey, endpoint FROM usageHistory WHERE timestamp >= ?`,
+      `SELECT timestamp, provider, model, connectionId, apiKeyId, endpoint FROM usageHistory WHERE timestamp >= ?`,
       [new Date(overlayCutoff).toISOString()]
     );
     for (const e of histRows) {
@@ -563,8 +602,8 @@ export async function getUsageStats(period = "all") {
         if (stats.byAccount[accountKey] && new Date(ts) > new Date(stats.byAccount[accountKey].lastUsed)) stats.byAccount[accountKey].lastUsed = ts;
       }
 
-      const apiKeyKey = (e.apiKey && typeof e.apiKey === "string")
-        ? `${e.apiKey}|${e.model}|${e.provider || "unknown"}`
+      const apiKeyKey = (e.apiKeyId && typeof e.apiKeyId === "string")
+        ? `${e.apiKeyId}|${e.model}|${e.provider || "unknown"}`
         : "local-no-key";
       if (stats.byApiKey[apiKeyKey] && new Date(ts) > new Date(stats.byApiKey[apiKeyKey].lastUsed)) stats.byApiKey[apiKeyKey].lastUsed = ts;
 
@@ -583,7 +622,7 @@ export async function getUsageStats(period = "all") {
       cutoff = new Date(Date.now() - PERIOD_MS["24h"]).toISOString();
     }
     const filtered = db.all(
-      `SELECT timestamp, provider, model, connectionId, apiKey, endpoint, promptTokens, completionTokens, cost, tokens FROM usageHistory WHERE timestamp >= ?`,
+      `SELECT timestamp, provider, model, connectionId, apiKeyId, endpoint, promptTokens, completionTokens, cost, tokens FROM usageHistory WHERE timestamp >= ?`,
       [cutoff]
     );
 
@@ -626,19 +665,19 @@ export async function getUsageStats(period = "all") {
         if (new Date(r.timestamp) > new Date(stats.byAccount[accountKey].lastUsed)) stats.byAccount[accountKey].lastUsed = r.timestamp;
       }
 
-      if (r.apiKey && typeof r.apiKey === "string") {
-        const keyInfo = apiKeyMap[r.apiKey];
-        const keyName = keyInfo?.name || r.apiKey.slice(0, 8) + "...";
-        const akKey = `${r.apiKey}|${r.model}|${r.provider || "unknown"}`;
+      if (r.apiKeyId && typeof r.apiKeyId === "string") {
+        const keyInfo = apiKeyMap[r.apiKeyId];
+        const keyName = keyInfo?.name || `Key ${r.apiKeyId.slice(0, 8)}...`;
+        const akKey = `${r.apiKeyId}|${r.model}|${r.provider || "unknown"}`;
         if (!stats.byApiKey[akKey]) {
-          stats.byApiKey[akKey] = { requests: 0, promptTokens: 0, completionTokens: 0, cost: 0, rawModel: r.model, provider: providerDisplayName, apiKey: r.apiKey, keyName, apiKeyKey: r.apiKey, lastUsed: r.timestamp };
+          stats.byApiKey[akKey] = { requests: 0, promptTokens: 0, completionTokens: 0, cost: 0, rawModel: r.model, provider: providerDisplayName, apiKeyId: r.apiKeyId, keyName, apiKeyKey: r.apiKeyId, lastUsed: r.timestamp };
         }
         const ake = stats.byApiKey[akKey];
         ake.requests++; ake.promptTokens += promptTokens; ake.completionTokens += completionTokens; ake.cost += entryCost;
         if (new Date(r.timestamp) > new Date(ake.lastUsed)) ake.lastUsed = r.timestamp;
       } else {
         if (!stats.byApiKey["local-no-key"]) {
-          stats.byApiKey["local-no-key"] = { requests: 0, promptTokens: 0, completionTokens: 0, cost: 0, rawModel: r.model, provider: providerDisplayName, apiKey: null, keyName: "Local (No API Key)", apiKeyKey: "local-no-key", lastUsed: r.timestamp };
+          stats.byApiKey["local-no-key"] = { requests: 0, promptTokens: 0, completionTokens: 0, cost: 0, rawModel: r.model, provider: providerDisplayName, apiKeyId: null, keyName: "Local (No API Key)", apiKeyKey: "local-no-key", lastUsed: r.timestamp };
         }
         const ake = stats.byApiKey["local-no-key"];
         ake.requests++; ake.promptTokens += promptTokens; ake.completionTokens += completionTokens; ake.cost += entryCost;

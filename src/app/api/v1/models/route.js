@@ -372,16 +372,11 @@ export async function buildModelsList(kindFilter) {
 }
 
 /**
- * Handle CORS preflight
+ * Handle CORS preflight — only allowlisted origins receive headers.
  */
-export async function OPTIONS() {
-  return new Response(null, {
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, OPTIONS",
-      "Access-Control-Allow-Headers": "*",
-    },
-  });
+export async function OPTIONS(request) {
+  const { handleCorsPreflight } = await import("@/sse/utils/cors.js");
+  return await handleCorsPreflight(request);
 }
 
 /**
@@ -390,6 +385,8 @@ export async function OPTIONS() {
  */
 export async function GET(request) {
   try {
+    const { buildCorsHeaders } = await import("@/sse/utils/cors.js");
+    const cors = await buildCorsHeaders(request);
     const settings = await getSettings();
     const apiKey = extractApiKey(request);
     let apiKeyRecord = null;
@@ -398,7 +395,7 @@ export async function GET(request) {
       if (!apiKey || !(await validateApiKey(apiKey))) {
         return Response.json(
           { error: { message: apiKey ? "Invalid API key" : "Missing API key", type: "authentication_error" } },
-          { status: 401, headers: { "Access-Control-Allow-Origin": "*" } }
+          { status: 401, headers: cors }
         );
       }
       apiKeyRecord = await loadApiKeyPolicy(apiKey);
@@ -407,9 +404,7 @@ export async function GET(request) {
     }
 
     const data = filterModelsByApiKeyPolicy(await buildModelsList([LLM_KIND]), apiKeyRecord);
-    return Response.json({ object: "list", data }, {
-      headers: { "Access-Control-Allow-Origin": "*" },
-    });
+    return Response.json({ object: "list", data }, { headers: cors });
   } catch (error) {
     console.log("Error fetching models:", error);
     return Response.json(

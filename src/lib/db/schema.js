@@ -1,5 +1,5 @@
 // Latest schema version — bumped when a migration is added in ./migrations/
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 8;
 
 export const PRAGMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -74,16 +74,42 @@ export const TABLES = {
   apiKeys: {
     columns: {
       id: "TEXT PRIMARY KEY",
-      key: "TEXT UNIQUE NOT NULL",
+      key: "TEXT",
+      keyHash: "TEXT UNIQUE",
+      keyPrefix: "TEXT",
+      keyLast4: "TEXT",
       name: "TEXT",
       machineId: "TEXT",
       isActive: "INTEGER DEFAULT 1",
       dailyTokenLimit: "INTEGER DEFAULT 0",
+      monthlyTokenLimit: "INTEGER DEFAULT 0",
+      lifetimeTokenLimit: "INTEGER DEFAULT 0",
+      requestsPerMinute: "INTEGER DEFAULT 0",
+      maxTokensPerRequest: "INTEGER DEFAULT 0",
       expiresAt: "TEXT",
       allowedModels: "TEXT DEFAULT '[]'",
+      allowedIps: "TEXT DEFAULT '[]'",
       createdAt: "TEXT NOT NULL",
     },
-    indexes: ["CREATE INDEX IF NOT EXISTS idx_ak_key ON apiKeys(key)"],
+    indexes: [
+      "CREATE INDEX IF NOT EXISTS idx_ak_key ON apiKeys(key)",
+      "CREATE INDEX IF NOT EXISTS idx_ak_keyhash ON apiKeys(keyHash)",
+    ],
+  },
+  keyAuditLog: {
+    columns: {
+      id: "INTEGER PRIMARY KEY AUTOINCREMENT",
+      timestamp: "TEXT NOT NULL",
+      keyId: "TEXT",
+      action: "TEXT NOT NULL",
+      actorIp: "TEXT",
+      metadata: "TEXT",
+    },
+    indexes: [
+      "CREATE INDEX IF NOT EXISTS idx_kal_keyid ON keyAuditLog(keyId)",
+      "CREATE INDEX IF NOT EXISTS idx_kal_ts ON keyAuditLog(timestamp DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_kal_action ON keyAuditLog(action)",
+    ],
   },
   combos: {
     columns: {
@@ -113,6 +139,7 @@ export const TABLES = {
       model: "TEXT",
       connectionId: "TEXT",
       apiKey: "TEXT",
+      apiKeyId: "TEXT",
       endpoint: "TEXT",
       promptTokens: "INTEGER DEFAULT 0",
       completionTokens: "INTEGER DEFAULT 0",
@@ -126,6 +153,7 @@ export const TABLES = {
       "CREATE INDEX IF NOT EXISTS idx_uh_provider ON usageHistory(provider)",
       "CREATE INDEX IF NOT EXISTS idx_uh_model ON usageHistory(model)",
       "CREATE INDEX IF NOT EXISTS idx_uh_conn ON usageHistory(connectionId)",
+      "CREATE INDEX IF NOT EXISTS idx_uh_apikeyid ON usageHistory(apiKeyId)",
     ],
   },
   usageDaily: {

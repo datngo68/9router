@@ -51,7 +51,7 @@ describe("DB SQLite layer — public API parity", () => {
   it("apiKeys: create/get/validate/delete", async () => {
     const k = await sqliteDb.createApiKey("test-key", "machine-abc");
     expect(k.id).toBeDefined();
-    expect(k.key).toMatch(/^sk-/);
+    expect(k.key).toMatch(/^sk_/);
     expect(k.machineId).toBe("machine-abc");
     expect(k.isActive).toBe(true);
 
@@ -224,23 +224,28 @@ describe("DB SQLite layer — public API parity", () => {
   });
 
   it("usage: getApiKeyDailyTokenUsage sums prompt and completion tokens for one key", async () => {
+    // Phase 1.2: usageHistory keys by apiKeyId, not the raw key. Create real
+    // keys to obtain ids and pass apiKeyId to saveRequestUsage.
+    const keyA = await sqliteDb.createApiKey("test-a", "machine-x");
+    const keyB = await sqliteDb.createApiKey("test-b", "machine-x");
+
     await sqliteDb.saveRequestUsage({
-      provider: "openai", model: "gpt-4o", apiKey: "sk-test-a",
+      provider: "openai", model: "gpt-4o", apiKeyId: keyA.id,
       tokens: { prompt_tokens: 80, completion_tokens: 20 },
       endpoint: "/v1/chat/completions", status: "ok",
     });
     await sqliteDb.saveRequestUsage({
-      provider: "openai", model: "gpt-4o", apiKey: "sk-test-a",
+      provider: "openai", model: "gpt-4o", apiKeyId: keyA.id,
       tokens: { prompt_tokens: 10, completion_tokens: 5 },
       endpoint: "/v1/chat/completions", status: "ok",
     });
     await sqliteDb.saveRequestUsage({
-      provider: "openai", model: "gpt-4o", apiKey: "sk-test-b",
+      provider: "openai", model: "gpt-4o", apiKeyId: keyB.id,
       tokens: { prompt_tokens: 999, completion_tokens: 1 },
       endpoint: "/v1/chat/completions", status: "ok",
     });
 
-    const usage = await sqliteDb.getApiKeyDailyTokenUsage("sk-test-a");
+    const usage = await sqliteDb.getApiKeyDailyTokenUsage(keyA.id);
     expect(usage.promptTokens).toBe(90);
     expect(usage.completionTokens).toBe(25);
     expect(usage.totalTokens).toBe(115);
@@ -249,7 +254,7 @@ describe("DB SQLite layer — public API parity", () => {
   it("usage: getApiKeyDailyUsageSummary reports remaining tokens and percent", async () => {
     const key = await sqliteDb.createApiKey("usage-summary", "machine-abc", { dailyTokenLimit: 200 });
     await sqliteDb.saveRequestUsage({
-      provider: "openai", model: "gpt-4o", apiKey: key.key,
+      provider: "openai", model: "gpt-4o", apiKeyId: key.id,
       tokens: { prompt_tokens: 70, completion_tokens: 30 },
       endpoint: "/v1/chat/completions", status: "ok",
     });
@@ -271,14 +276,14 @@ describe("DB SQLite layer — public API parity", () => {
   it("usage: today stats use the same normalized token counts as API key summary", async () => {
     const key = await sqliteDb.createApiKey("input-output-summary", "machine-abc", { dailyTokenLimit: 200 });
     await sqliteDb.saveRequestUsage({
-      provider: "anthropic", model: "claude-test", apiKey: key.key,
+      provider: "anthropic", model: "claude-test", apiKeyId: key.id,
       tokens: { input_tokens: 40, output_tokens: 60 },
       endpoint: "/v1/messages", status: "ok",
     });
 
     const summary = await sqliteDb.getApiKeyDailyUsageSummary(key);
     const stats = await sqliteDb.getUsageStats("today");
-    const byApiKeyEntry = Object.values(stats.byApiKey).find((entry) => entry.apiKey === key.key);
+    const byApiKeyEntry = Object.values(stats.byApiKey).find((entry) => entry.apiKeyId === key.id);
 
     expect(summary.usedTokens).toBe(100);
     expect(stats.totalPromptTokens + stats.totalCompletionTokens).toBeGreaterThanOrEqual(100);

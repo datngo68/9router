@@ -32,6 +32,11 @@ export {
   getApiKeys, getApiKeyById, getApiKeyByKey, createApiKey, updateApiKey, deleteApiKey, validateApiKey,
 } from "./repos/apiKeysRepo.js";
 
+// API key audit log
+export {
+  logKeyAudit, getKeyAuditLog,
+} from "./repos/keyAuditRepo.js";
+
 // Combos
 export {
   getCombos, getComboById, getComboByName,
@@ -58,7 +63,7 @@ export {
 // Usage
 export {
   statsEmitter, trackPendingRequest, getActiveRequests,
-  saveRequestUsage, getApiKeyDailyTokenUsage, getApiKeyDailyUsageSummary, getUsageHistory, getUsageStats, getChartData,
+  saveRequestUsage, getApiKeyDailyTokenUsage, getApiKeyMonthlyTokenUsage, getApiKeyLifetimeTokenUsage, getApiKeyDailyUsageSummary, getUsageHistory, getUsageStats, getChartData,
   appendRequestLog, getRecentLogs,
 } from "./repos/usageRepo.js";
 
@@ -84,6 +89,8 @@ export async function exportDb() {
       machineId: r.machineId,
       isActive: r.isActive === 1,
       dailyTokenLimit: r.dailyTokenLimit || 0,
+      requestsPerMinute: r.requestsPerMinute || 0,
+      maxTokensPerRequest: r.maxTokensPerRequest || 0,
       expiresAt: r.expiresAt || null,
       allowedModels: parseJson(r.allowedModels, []),
       createdAt: r.createdAt,
@@ -146,15 +153,18 @@ export async function importDb(payload) {
       );
     }
     for (const k of payload.apiKeys || []) {
+      const numOrZero = (v) => Number.isFinite(Number(v)) ? Math.max(0, Math.floor(Number(v))) : 0;
       db.run(
-        `INSERT OR REPLACE INTO apiKeys(id, key, name, machineId, isActive, dailyTokenLimit, expiresAt, allowedModels, createdAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR REPLACE INTO apiKeys(id, key, name, machineId, isActive, dailyTokenLimit, requestsPerMinute, maxTokensPerRequest, expiresAt, allowedModels, createdAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           k.id,
           k.key,
           k.name || null,
           k.machineId || null,
           k.isActive === false ? 0 : 1,
-          Number.isFinite(Number(k.dailyTokenLimit)) ? Math.max(0, Math.floor(Number(k.dailyTokenLimit))) : 0,
+          numOrZero(k.dailyTokenLimit),
+          numOrZero(k.requestsPerMinute),
+          numOrZero(k.maxTokensPerRequest),
           k.expiresAt || null,
           stringifyJson(Array.isArray(k.allowedModels) ? Array.from(new Set(k.allowedModels.map((m) => typeof m === "string" ? m.trim() : "").filter(Boolean))) : []),
           k.createdAt || new Date().toISOString(),

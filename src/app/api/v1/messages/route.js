@@ -1,5 +1,6 @@
 import { handleChat } from "@/sse/handlers/chat.js";
 import { initTranslators } from "open-sse/translator/index.js";
+import { handleCorsPreflight } from "@/sse/utils/cors.js";
 
 let initialized = false;
 
@@ -14,16 +15,10 @@ async function ensureInitialized() {
 }
 
 /**
- * Handle CORS preflight
+ * Handle CORS preflight — returns headers only for allowlisted origins.
  */
-export async function OPTIONS() {
-  return new Response(null, {
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "*"
-    }
-  });
+export async function OPTIONS(request) {
+  return await handleCorsPreflight(request);
 }
 
 /**

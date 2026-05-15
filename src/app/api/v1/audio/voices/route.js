@@ -1,6 +1,6 @@
 import { AI_PROVIDERS } from "@/shared/constants/providers";
+import { buildCorsHeaders, handleCorsPreflight } from "@/sse/utils/cors.js";
 
-// Provider → internal voices API. Edge/local-device share the generic endpoint.
 const PROVIDER_API = {
   elevenlabs: (origin) => `${origin}/api/media-providers/tts/elevenlabs/voices`,
   deepgram: (origin) => `${origin}/api/media-providers/tts/deepgram/voices`,
@@ -9,15 +9,12 @@ const PROVIDER_API = {
   "local-device": (origin) => `${origin}/api/media-providers/tts/voices?provider=local-device`,
 };
 
-export async function OPTIONS() {
-  return new Response(null, {
-    headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS" },
-  });
+export async function OPTIONS(request) {
+  return await handleCorsPreflight(request);
 }
 
-// GET /v1/audio/voices?provider={p}[&lang=xx]
-// Returns OpenAI-style list with each voice's full model id ready for /v1/audio/speech
 export async function GET(request) {
+  const cors = await buildCorsHeaders(request);
   try {
     const { searchParams, origin } = new URL(request.url);
     const provider = searchParams.get("provider");
@@ -26,7 +23,7 @@ export async function GET(request) {
     if (!provider || !PROVIDER_API[provider]) {
       return Response.json(
         { error: { message: `provider must be one of: ${Object.keys(PROVIDER_API).join(", ")}`, type: "invalid_request_error" } },
-        { status: 400, headers: { "Access-Control-Allow-Origin": "*" } },
+        { status: 400, headers: cors },
       );
     }
 
@@ -37,16 +34,14 @@ export async function GET(request) {
     if (!res.ok || data.error) {
       return Response.json(
         { error: { message: data.error || `Upstream ${res.status}`, type: "server_error" } },
-        { status: res.status, headers: { "Access-Control-Allow-Origin": "*" } },
+        { status: res.status, headers: cors },
       );
     }
 
-    // Internal API shape: { voices } when lang filter, else { byLang, languages }
     const rawVoices = lang
       ? (data.voices || [])
       : Object.values(data.byLang || {}).flatMap((l) => l.voices || []);
 
-    // Use provider alias for /v1/audio/speech model param (matches skill convention e.g. el/, dg/, edge-tts/)
     const alias = AI_PROVIDERS[provider]?.alias || provider;
     const data_out = rawVoices.map((v) => ({
       id: v.id,
@@ -56,13 +51,11 @@ export async function GET(request) {
       model: `${alias}/${v.id}`,
     }));
 
-    return Response.json({ object: "list", data: data_out }, {
-      headers: { "Access-Control-Allow-Origin": "*" },
-    });
+    return Response.json({ object: "list", data: data_out }, { headers: cors });
   } catch (err) {
     return Response.json(
       { error: { message: err.message || "Failed", type: "server_error" } },
-      { status: 502, headers: { "Access-Control-Allow-Origin": "*" } },
+      { status: 502, headers: cors },
     );
   }
 }

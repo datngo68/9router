@@ -23,9 +23,40 @@ import {
   loadApiKeyPolicy,
   checkApiKeyExpiry,
   checkApiKeyDailyTokenLimit,
+  checkApiKeyMonthlyTokenLimit,
+  checkApiKeyLifetimeTokenLimit,
+  checkApiKeyMaxTokensPerRequest,
   checkApiKeyModelAccess,
   checkApiKeyComboModelAccess,
 } from "../services/apiKeyPolicy.js";
+import {
+  estimateRequestTokens,
+  reserveTokens,
+  releaseTokens,
+  attachReservationLifecycle,
+} from "../services/apiKeyReservation.js";
+import { consumeRequest } from "../services/apiKeyRateLimit.js";
+import { checkIpAllowlist } from "../services/ipAllowlist.js";
+import { getClientIp } from "@/lib/auth/loginThrottle.js";
+
+const SENSITIVE_HEADER_PATTERNS = ["authorization", "x-api-key", "cookie", "set-cookie", "x-auth-token"];
+
+function maskHeaders(headers) {
+  if (!headers || typeof headers !== "object") return {};
+  const out = { ...headers };
+  for (const k of Object.keys(out)) {
+    const lk = k.toLowerCase();
+    if (SENSITIVE_HEADER_PATTERNS.some((s) => lk.includes(s))) {
+      const v = out[k];
+      if (typeof v === "string") {
+        out[k] = v.length > 14 ? `${v.slice(0, 10)}...${v.slice(-4)}` : "***";
+      } else if (v != null) {
+        out[k] = "***";
+      }
+    }
+  }
+  return out;
+}
 
 /**
  * Handle chat completion request
@@ -41,13 +72,16 @@ export async function handleChat(request, clientRawRequest = null) {
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid JSON body");
   }
 
-  // Build clientRawRequest for logging (if not provided)
+  // Build clientRawRequest for logging (if not provided). Sensitive headers
+  // are masked here so anything persisted downstream (e.g. saveRequestDetail
+  // → DB) cannot be replayed.
   if (!clientRawRequest) {
     const url = new URL(request.url);
+    const rawHeaders = Object.fromEntries(request.headers.entries());
     clientRawRequest = {
       endpoint: url.pathname,
       body,
-      headers: Object.fromEntries(request.headers.entries())
+      headers: maskHeaders(rawHeaders),
     };
   }
   cacheClaudeHeaders(clientRawRequest.headers);
@@ -75,6 +109,7 @@ export async function handleChat(request, clientRawRequest = null) {
   // Enforce API key if enabled in settings
   const settings = await getSettings();
   let apiKeyRecord = null;
+  let reservationId = null;
   if (settings.requireApiKey) {
     if (!apiKey) {
       log.warn("AUTH", "Missing API key (requireApiKey=true)");
@@ -91,6 +126,15 @@ export async function handleChat(request, clientRawRequest = null) {
       log.warn("AUTH", expiryCheck.message);
       return errorResponse(expiryCheck.status, expiryCheck.message);
     }
+
+    // Per-key IP allowlist (CIDR). Empty list = unrestricted.
+    if (Array.isArray(apiKeyRecord?.allowedIps) && apiKeyRecord.allowedIps.length > 0) {
+      const clientIp = getClientIp(request);
+      if (!checkIpAllowlist(clientIp, apiKeyRecord.allowedIps)) {
+        log.warn("AUTH", `API key denied for IP ${clientIp}`);
+        return errorResponse(HTTP_STATUS.FORBIDDEN, "API key is not allowed from this IP address");
+      }
+    }
     const quotaCheck = await checkApiKeyDailyTokenLimit(apiKeyRecord);
     if (!quotaCheck.allowed) {
       log.warn("AUTH", quotaCheck.message);
@@ -101,7 +145,85 @@ export async function handleChat(request, clientRawRequest = null) {
       response.headers.set("X-Api-Key-Token-Reset", quotaCheck.resetAt);
       return response;
     }
+
+    // Monthly cap (resets first day of next local month).
+    const monthCheck = await checkApiKeyMonthlyTokenLimit(apiKeyRecord);
+    if (!monthCheck.allowed) {
+      log.warn("AUTH", monthCheck.message);
+      const response = errorResponse(monthCheck.status, monthCheck.message);
+      response.headers.set("X-Api-Key-Month-Limit", String(monthCheck.limit));
+      response.headers.set("X-Api-Key-Month-Used", String(monthCheck.usage.totalTokens));
+      response.headers.set("X-Api-Key-Month-Reset", monthCheck.resetAt);
+      return response;
+    }
+
+    // Lifetime cap (never resets — for prepaid token packs).
+    const lifeCheck = await checkApiKeyLifetimeTokenLimit(apiKeyRecord);
+    if (!lifeCheck.allowed) {
+      log.warn("AUTH", lifeCheck.message);
+      const response = errorResponse(lifeCheck.status, lifeCheck.message);
+      response.headers.set("X-Api-Key-Lifetime-Limit", String(lifeCheck.limit));
+      response.headers.set("X-Api-Key-Lifetime-Used", String(lifeCheck.usage.totalTokens));
+      return response;
+    }
+
+    // Per-key requests-per-minute throttle. Sliding 60s window in RAM.
+    const rateLimit = Number(apiKeyRecord?.requestsPerMinute || 0);
+    if (rateLimit > 0) {
+      const consumed = consumeRequest(apiKeyRecord.id, rateLimit);
+      if (!consumed.allowed) {
+        const retrySec = Math.max(1, Math.ceil(consumed.retryAfterMs / 1000));
+        log.warn("AUTH", `API key rate limit ${consumed.current}/${consumed.limit} req/min`);
+        const response = errorResponse(
+          HTTP_STATUS.RATE_LIMITED,
+          `API key rate limit exceeded (${consumed.current}/${consumed.limit} req/min)`
+        );
+        response.headers.set("Retry-After", String(retrySec));
+        response.headers.set("X-Api-Key-Rate-Limit", String(consumed.limit));
+        response.headers.set("X-Api-Key-Rate-Remaining", "0");
+        return response;
+      }
+    }
+
+    // Per-key max_tokens cap. Reject explicit overshoot, otherwise inject cap.
+    const maxCheck = checkApiKeyMaxTokensPerRequest(apiKeyRecord, body);
+    if (!maxCheck.allowed) {
+      log.warn("AUTH", maxCheck.message);
+      return errorResponse(maxCheck.status, maxCheck.message);
+    }
+    if (maxCheck.enforce) {
+      // Inject cap into the most common fields. Providers will pick what they support.
+      body.max_tokens = body.max_tokens ?? maxCheck.enforce;
+      body.max_completion_tokens = body.max_completion_tokens ?? maxCheck.enforce;
+    }
+
+    // Reserve estimated tokens so concurrent requests see in-flight usage
+    // when checking the daily/monthly/lifetime limits. Released when the
+    // response stream ends.
+    const hasAnyLimit = (apiKeyRecord?.dailyTokenLimit || 0) > 0
+      || (apiKeyRecord?.monthlyTokenLimit || 0) > 0
+      || (apiKeyRecord?.lifetimeTokenLimit || 0) > 0;
+    if (hasAnyLimit) {
+      reservationId = reserveTokens(apiKeyRecord.id, estimateRequestTokens(body));
+    }
   }
+
+  // Wrap any response returned from this point with the reservation lifecycle
+  // so the in-flight token estimate is released exactly when the body finishes.
+  const finalize = (response) => attachReservationLifecycle(response, reservationId);
+
+  try {
+    return finalize(await dispatchChat({
+      body, modelStr, request, clientRawRequest, settings,
+      apiKeyId: apiKeyRecord?.id || null, apiKeyRecord,
+    }));
+  } catch (error) {
+    releaseTokens(reservationId);
+    throw error;
+  }
+}
+
+async function dispatchChat({ body, modelStr, request, clientRawRequest, settings, apiKeyId, apiKeyRecord }) {
 
   if (!modelStr) {
     log.warn("CHAT", "Missing model");
@@ -132,7 +254,7 @@ export async function handleChat(request, clientRawRequest = null) {
     return handleComboChat({
       body,
       models: comboModels,
-      handleSingleModel: (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, apiKeyRecord),
+      handleSingleModel: (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKeyId, apiKeyRecord),
       log,
       comboName: modelStr,
       comboStrategy,
@@ -141,13 +263,13 @@ export async function handleChat(request, clientRawRequest = null) {
   }
 
   // Single model request
-  return handleSingleModelChat(body, modelStr, clientRawRequest, request, apiKey, apiKeyRecord);
+  return handleSingleModelChat(body, modelStr, clientRawRequest, request, apiKeyId, apiKeyRecord);
 }
 
 /**
  * Handle single model chat request
  */
-async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKey = null, apiKeyRecord = null) {
+async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKeyId = null, apiKeyRecord = null) {
   const modelInfo = await getModelInfo(modelStr);
 
   // If provider is null, this might be a combo name - check and handle
@@ -165,7 +287,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       return handleComboChat({
         body,
         models: comboModels,
-        handleSingleModel: (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, apiKeyRecord),
+        handleSingleModel: (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKeyId, apiKeyRecord),
         log,
         comboName: modelStr,
         comboStrategy,
@@ -246,7 +368,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       clientRawRequest,
       connectionId: credentials.connectionId,
       userAgent,
-      apiKey,
+      apiKeyId,
       ccFilterNaming: !!chatSettings.ccFilterNaming,
       rtkEnabled: !!chatSettings.rtkEnabled,
       cavemanEnabled: !!chatSettings.cavemanEnabled,

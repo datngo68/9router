@@ -1,27 +1,24 @@
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "*"
-};
+import { buildCorsHeaders, handleCorsPreflight } from "@/sse/utils/cors.js";
 
 /**
  * Handle CORS preflight
  */
-export async function OPTIONS() {
-  return new Response(null, { headers: CORS_HEADERS });
+export async function OPTIONS(request) {
+  return await handleCorsPreflight(request);
 }
 
 /**
  * POST /v1/messages/count_tokens - Mock token count response
  */
 export async function POST(request) {
+  const cors = await buildCorsHeaders(request);
   let body;
   try {
     body = await request.json();
   } catch {
     return new Response(JSON.stringify({ error: "Invalid JSON body" }), {
       status: 400,
-      headers: { "Content-Type": "application/json", ...CORS_HEADERS }
+      headers: { "Content-Type": "application/json", ...cors }
     });
   }
 
@@ -46,7 +43,6 @@ export async function POST(request) {
   return new Response(JSON.stringify({
     input_tokens: inputTokens
   }), {
-    headers: { "Content-Type": "application/json", ...CORS_HEADERS }
+    headers: { "Content-Type": "application/json", ...cors }
   });
 }
-

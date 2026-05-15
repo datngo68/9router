@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSettings, updateSettings } from "@/lib/localDb";
 import { applyOutboundProxyEnv } from "@/lib/network/outboundProxy";
 import { resetComboRotation } from "open-sse/services/combo.js";
+import { validateSettingsPatch } from "@/lib/security/tunnelGuard";
 import bcrypt from "bcryptjs";
 
 export const dynamic = "force-dynamic";
@@ -36,6 +37,12 @@ export async function PATCH(request) {
   try {
     const body = await request.json();
 
+    // Reject patches that would weaken security while a tunnel is active.
+    const guard = await validateSettingsPatch(body);
+    if (guard) {
+      return NextResponse.json({ error: guard.error }, { status: guard.status });
+    }
+
     // If updating password, hash it
     if (body.newPassword) {
       const settings = await getSettings();
@@ -62,6 +69,10 @@ export async function PATCH(request) {
       body.password = await bcrypt.hash(body.newPassword, salt);
       delete body.newPassword;
       delete body.currentPassword;
+      // Invalidate all existing sessions when password changes.
+      const { revokeAllDashboardSessions } = await import("@/lib/auth/dashboardSession");
+      const newVersion = await revokeAllDashboardSessions();
+      body.tokenVersion = newVersion;
     }
 
     if (Object.prototype.hasOwnProperty.call(body, "oidcClientSecret")) {

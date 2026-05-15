@@ -1,5 +1,6 @@
 import { PROVIDER_MODELS } from "open-sse/config/providerModels.js";
 import { AI_PROVIDERS, ALIAS_TO_ID } from "@/shared/constants/providers";
+import { buildCorsHeaders, handleCorsPreflight } from "@/sse/utils/cors.js";
 
 const KIND_ENDPOINT = {
   llm: "/v1/chat/completions",
@@ -39,7 +40,6 @@ function buildInfo({ alias, providerId, model, kind, providerInfo }) {
   return out;
 }
 
-// id format: "{alias}/{modelId}" - alias may also be providerId
 function lookup(fullId) {
   if (!fullId || !fullId.includes("/")) return null;
   const slash = fullId.indexOf("/");
@@ -48,7 +48,6 @@ function lookup(fullId) {
   const providerId = ALIAS_TO_ID[alias] || alias;
   const providerInfo = AI_PROVIDERS[providerId];
 
-  // PROVIDER_MODELS lookup (by alias key, fallback to providerId)
   const list = PROVIDER_MODELS[alias] || PROVIDER_MODELS[providerId] || [];
   const m = list.find((x) => x.id === modelId);
   if (m) {
@@ -56,7 +55,6 @@ function lookup(fullId) {
     return buildInfo({ alias, providerId, model: m, kind, providerInfo });
   }
 
-  // Sub-configs (TTS/STT/embedding only-in-config)
   const subs = [
     ["tts", providerInfo?.ttsConfig],
     ["stt", providerInfo?.sttConfig],
@@ -67,7 +65,6 @@ function lookup(fullId) {
     if (sm) return buildInfo({ alias, providerId, model: sm, kind, providerInfo });
   }
 
-  // Web search/fetch — virtual model id "search" / "fetch"
   if (modelId === "search" && providerInfo?.searchConfig) {
     return buildInfo({
       alias, providerId, kind: "webSearch", providerInfo,
@@ -83,28 +80,27 @@ function lookup(fullId) {
   return null;
 }
 
-export async function OPTIONS() {
-  return new Response(null, {
-    headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS" },
-  });
+export async function OPTIONS(request) {
+  return await handleCorsPreflight(request);
 }
 
 // GET /v1/models/info?id={alias}/{modelId} — metadata for a single model
 export async function GET(request) {
+  const cors = await buildCorsHeaders(request);
   const { searchParams } = new URL(request.url);
   const id = searchParams.get("id");
   if (!id) {
     return Response.json(
       { error: { message: "Missing required query param: id (e.g. ?id=openai/dall-e-3)", type: "invalid_request_error" } },
-      { status: 400, headers: { "Access-Control-Allow-Origin": "*" } },
+      { status: 400, headers: cors },
     );
   }
   const info = lookup(id);
   if (!info) {
     return Response.json(
       { error: { message: `Model not found: ${id}`, type: "not_found" } },
-      { status: 404, headers: { "Access-Control-Allow-Origin": "*" } },
+      { status: 404, headers: cors },
     );
   }
-  return Response.json(info, { headers: { "Access-Control-Allow-Origin": "*" } });
+  return Response.json(info, { headers: cors });
 }

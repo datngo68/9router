@@ -45,8 +45,13 @@ export default function APIPageClient({ machineId }) {
   const [showAddModal, setShowAddModal] = useState(false);
   const [newKeyName, setNewKeyName] = useState("");
   const [newDailyTokenLimit, setNewDailyTokenLimit] = useState("");
+  const [newMonthlyTokenLimit, setNewMonthlyTokenLimit] = useState("");
+  const [newLifetimeTokenLimit, setNewLifetimeTokenLimit] = useState("");
+  const [newRequestsPerMinute, setNewRequestsPerMinute] = useState("");
+  const [newMaxTokensPerRequest, setNewMaxTokensPerRequest] = useState("");
   const [newExpiresAt, setNewExpiresAt] = useState("");
   const [newAllowedModels, setNewAllowedModels] = useState([]);
+  const [newAllowedIps, setNewAllowedIps] = useState("");
   const [editingKey, setEditingKey] = useState(null);
   const [createdKey, setCreatedKey] = useState(null);
   const [confirmState, setConfirmState] = useState(null);
@@ -105,8 +110,9 @@ export default function APIPageClient({ machineId }) {
   const [tunnelEverReachable, setTunnelEverReachable] = useState(false);
   const [tsEverReachable, setTsEverReachable] = useState(false);
 
-  // API key visibility toggle state
-  const [visibleKeys, setVisibleKeys] = useState(new Set());
+  // API key visibility toggle state (no longer used post Phase 1.2; raw keys
+  // are never sent to the client after creation, only the just-created modal
+  // shows them once).
 
   const { copied, copy } = useCopyToClipboard();
 
@@ -657,15 +663,28 @@ export default function APIPageClient({ machineId }) {
   const resetKeyPolicyForm = () => {
     setNewKeyName("");
     setNewDailyTokenLimit("");
+    setNewMonthlyTokenLimit("");
+    setNewLifetimeTokenLimit("");
+    setNewRequestsPerMinute("");
+    setNewMaxTokensPerRequest("");
     setNewExpiresAt("");
     setNewAllowedModels([]);
+    setNewAllowedIps("");
   };
 
   const buildKeyPolicyPayload = () => ({
     name: newKeyName.trim(),
     dailyTokenLimit: newDailyTokenLimit === "" ? 0 : Number(newDailyTokenLimit),
+    monthlyTokenLimit: newMonthlyTokenLimit === "" ? 0 : Number(newMonthlyTokenLimit),
+    lifetimeTokenLimit: newLifetimeTokenLimit === "" ? 0 : Number(newLifetimeTokenLimit),
+    requestsPerMinute: newRequestsPerMinute === "" ? 0 : Number(newRequestsPerMinute),
+    maxTokensPerRequest: newMaxTokensPerRequest === "" ? 0 : Number(newMaxTokensPerRequest),
     expiresAt: newExpiresAt || null,
     allowedModels: newAllowedModels,
+    allowedIps: newAllowedIps
+      .split(/[\n,]/)
+      .map((s) => s.trim())
+      .filter(Boolean),
   });
 
   const handleCreateKey = async () => {
@@ -694,8 +713,13 @@ export default function APIPageClient({ machineId }) {
     setEditingKey(key);
     setNewKeyName(key.name || "");
     setNewDailyTokenLimit(key.dailyTokenLimit ? String(key.dailyTokenLimit) : "");
+    setNewMonthlyTokenLimit(key.monthlyTokenLimit ? String(key.monthlyTokenLimit) : "");
+    setNewLifetimeTokenLimit(key.lifetimeTokenLimit ? String(key.lifetimeTokenLimit) : "");
+    setNewRequestsPerMinute(key.requestsPerMinute ? String(key.requestsPerMinute) : "");
+    setNewMaxTokensPerRequest(key.maxTokensPerRequest ? String(key.maxTokensPerRequest) : "");
     setNewExpiresAt(key.expiresAt ? key.expiresAt.slice(0, 10) : "");
     setNewAllowedModels(Array.isArray(key.allowedModels) ? key.allowedModels : []);
+    setNewAllowedIps(Array.isArray(key.allowedIps) ? key.allowedIps.join(", ") : "");
   };
 
   const handleUpdateKeyPolicy = async () => {
@@ -727,11 +751,6 @@ export default function APIPageClient({ machineId }) {
           const res = await fetch(`/api/keys/${id}`, { method: "DELETE" });
           if (res.ok) {
             setKeys(keys.filter((k) => k.id !== id));
-            setVisibleKeys(prev => {
-              const next = new Set(prev);
-              next.delete(id);
-              return next;
-            });
           }
         } catch (error) {
           console.log("Error deleting key:", error);
@@ -760,6 +779,11 @@ export default function APIPageClient({ machineId }) {
     return fullKey.length > 8 ? fullKey.slice(0, 8) + "..." : fullKey;
   };
 
+  // After Phase 1.2, the GET response no longer contains the raw `key` field.
+  // We use prefix + last4 for display. Render plaintext only for the just-created
+  // key on the "API Key Created" modal (view-once).
+  const renderKeyMasked = (key) => key.keyDisplay || maskKey(key.key) || "";
+
   const formatTokenLimit = (value) => {
     const limit = Number(value || 0);
     return limit > 0 ? `${limit.toLocaleString()} tokens/day` : "No token limit";
@@ -780,15 +804,6 @@ export default function APIPageClient({ machineId }) {
     if (usage.usagePercent >= 100) return "bg-red-500";
     if (usage.usagePercent >= 80) return "bg-amber-500";
     return "bg-primary";
-  };
-
-  const toggleKeyVisibility = (keyId) => {
-    setVisibleKeys(prev => {
-      const next = new Set(prev);
-      if (next.has(keyId)) next.delete(keyId);
-      else next.add(keyId);
-      return next;
-    });
   };
 
   const baseUrl = typeof window !== "undefined" ? `${window.location.origin}/v1` : "/v1";
@@ -1153,28 +1168,19 @@ export default function APIPageClient({ machineId }) {
               >
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium">{key.name}</p>
-                  <div className="flex items-center gap-2 mt-1">
-                    <code className="text-xs text-text-muted font-mono">
-                      {visibleKeys.has(key.id) ? key.key : maskKey(key.key)}
-                    </code>
-                    <button
-                      onClick={() => toggleKeyVisibility(key.id)}
-                      className="p-1 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all"
-                      title={visibleKeys.has(key.id) ? "Hide key" : "Show key"}
-                    >
-                      <span className="material-symbols-outlined text-[14px]">
-                        {visibleKeys.has(key.id) ? "visibility_off" : "visibility"}
-                      </span>
-                    </button>
-                    <button
-                      onClick={() => copy(key.key, key.id)}
-                      className="p-1 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all"
-                    >
-                      <span className="material-symbols-outlined text-[14px]">
-                        {copied === key.id ? "check" : "content_copy"}
-                      </span>
-                    </button>
-                  </div>
+                <div className="flex items-center gap-2 mt-1">
+                  <code className="text-xs text-text-muted font-mono">
+                    {renderKeyMasked(key)}
+                  </code>
+                  <button
+                    onClick={() => copy(key.keyDisplay || "", key.id)}
+                    className="p-1 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all"
+                  >
+                    <span className="material-symbols-outlined text-[14px]">
+                      {copied === key.id ? "check" : "content_copy"}
+                    </span>
+                  </button>
+                </div>
                   <p className="text-xs text-text-muted mt-1">
                     Created {new Date(key.createdAt).toLocaleDateString()}
                   </p>
@@ -1273,6 +1279,42 @@ export default function APIPageClient({ machineId }) {
             hint="Resets daily using server local date"
           />
           <Input
+            label="Monthly Token Limit"
+            type="number"
+            min="0"
+            value={newMonthlyTokenLimit}
+            onChange={(e) => setNewMonthlyTokenLimit(e.target.value)}
+            placeholder="0 = unlimited"
+            hint="Resets first day of next local month"
+          />
+          <Input
+            label="Lifetime Token Limit"
+            type="number"
+            min="0"
+            value={newLifetimeTokenLimit}
+            onChange={(e) => setNewLifetimeTokenLimit(e.target.value)}
+            placeholder="0 = unlimited"
+            hint="Never resets — for prepaid token packs"
+          />
+          <Input
+            label="Requests / minute"
+            type="number"
+            min="0"
+            value={newRequestsPerMinute}
+            onChange={(e) => setNewRequestsPerMinute(e.target.value)}
+            placeholder="0 = unlimited"
+            hint="Sliding 60s window per key"
+          />
+          <Input
+            label="Max tokens per request"
+            type="number"
+            min="0"
+            value={newMaxTokensPerRequest}
+            onChange={(e) => setNewMaxTokensPerRequest(e.target.value)}
+            placeholder="0 = unlimited"
+            hint="Caps body.max_tokens to prevent runaway requests"
+          />
+          <Input
             label="Expires At"
             type="date"
             value={newExpiresAt}
@@ -1288,6 +1330,13 @@ export default function APIPageClient({ machineId }) {
             title="Select Allowed Models"
             hint="Empty = all models. Pick provider/model or an existing combo."
             addLabel="Add Allowed Model"
+          />
+          <Input
+            label="Allowed IPs (CIDR, comma-separated)"
+            value={newAllowedIps}
+            onChange={(e) => setNewAllowedIps(e.target.value)}
+            placeholder="e.g. 203.0.113.0/24, 2001:db8::/32"
+            hint="Empty = unrestricted. Supports IPv4 and IPv6 CIDR."
           />
           <div className="flex gap-2">
             <Button onClick={handleCreateKey} fullWidth disabled={!newKeyName.trim()}>
@@ -1333,6 +1382,42 @@ export default function APIPageClient({ machineId }) {
             hint="Resets daily using server local date"
           />
           <Input
+            label="Monthly Token Limit"
+            type="number"
+            min="0"
+            value={newMonthlyTokenLimit}
+            onChange={(e) => setNewMonthlyTokenLimit(e.target.value)}
+            placeholder="0 = unlimited"
+            hint="Resets first day of next local month"
+          />
+          <Input
+            label="Lifetime Token Limit"
+            type="number"
+            min="0"
+            value={newLifetimeTokenLimit}
+            onChange={(e) => setNewLifetimeTokenLimit(e.target.value)}
+            placeholder="0 = unlimited"
+            hint="Never resets — for prepaid token packs"
+          />
+          <Input
+            label="Requests / minute"
+            type="number"
+            min="0"
+            value={newRequestsPerMinute}
+            onChange={(e) => setNewRequestsPerMinute(e.target.value)}
+            placeholder="0 = unlimited"
+            hint="Sliding 60s window per key"
+          />
+          <Input
+            label="Max tokens per request"
+            type="number"
+            min="0"
+            value={newMaxTokensPerRequest}
+            onChange={(e) => setNewMaxTokensPerRequest(e.target.value)}
+            placeholder="0 = unlimited"
+            hint="Caps body.max_tokens to prevent runaway requests"
+          />
+          <Input
             label="Expires At"
             type="date"
             value={newExpiresAt}
@@ -1348,6 +1433,13 @@ export default function APIPageClient({ machineId }) {
             title="Select Allowed Models"
             hint="Empty = all models. Pick provider/model or an existing combo."
             addLabel="Add Allowed Model"
+          />
+          <Input
+            label="Allowed IPs (CIDR, comma-separated)"
+            value={newAllowedIps}
+            onChange={(e) => setNewAllowedIps(e.target.value)}
+            placeholder="e.g. 203.0.113.0/24, 2001:db8::/32"
+            hint="Empty = unrestricted. Supports IPv4 and IPv6 CIDR."
           />
           <div className="flex gap-2">
             <Button onClick={handleUpdateKeyPolicy} fullWidth disabled={!newKeyName.trim()}>

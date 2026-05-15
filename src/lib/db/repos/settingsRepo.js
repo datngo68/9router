@@ -99,6 +99,13 @@ export async function getCloudUrl() {
   );
 }
 
-export async function exportSettings() {
-  return await readRaw();
+// Fields that are sensitive secrets and must never appear in exports/backups.
+const SECRET_KEYS = ["password", "oidcClientSecret"];
+
+export async function exportSettings({ includeSecrets = false } = {}) {
+  const raw = await readRaw();
+  if (includeSecrets) return raw;
+  const sanitized = { ...raw };
+  for (const k of SECRET_KEYS) delete sanitized[k];
+  return sanitized;
 }

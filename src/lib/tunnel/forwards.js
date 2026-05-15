@@ -59,11 +59,19 @@ function publicUrlFor(entry) {
   return `https://${getEffectiveSubdomain(entry)}.abc-tunnel.us`;
 }
 
-// Subdomain used both as worker key and in the public URL.
+// Public-facing subdomain used in the URL.
 // Random entries: legacy "r<shortId>" prefix.
 // Custom entries: exact value the user entered.
 function getEffectiveSubdomain(entry) {
   return entry.customSubdomain || `r${entry.shortId}`;
+}
+
+// Key used when registering with the worker.
+// The worker strips the leading "r" before lookup for random entries,
+// so we must register the RAW shortId (matching tunnelManager.js behavior).
+// Custom subdomains are registered as-is.
+function getWorkerKey(entry) {
+  return entry.customSubdomain || entry.shortId;
 }
 
 // Loose validation: 3-32 chars, [a-z0-9-], no leading/trailing hyphen.
@@ -219,7 +227,7 @@ export async function enableForward(id) {
 
     const onUrlUpdate = (newUrl) => {
       activeUrls.set(id, newUrl);
-      registerWithWorker(getEffectiveSubdomain(entry), newUrl).catch(() => {});
+      registerWithWorker(getWorkerKey(entry), newUrl).catch(() => {});
     };
 
     const onExit = () => {
@@ -239,7 +247,7 @@ export async function enableForward(id) {
     childProcs.set(id, result.child);
     activeUrls.set(id, result.tunnelUrl);
     saveForwardPid(id, result.child.pid);
-    await registerWithWorker(getEffectiveSubdomain(entry), result.tunnelUrl);
+    await registerWithWorker(getWorkerKey(entry), result.tunnelUrl);
 
     // Persist enabled flag
     entry.enabled = true;

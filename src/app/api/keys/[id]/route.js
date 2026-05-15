@@ -1,8 +1,18 @@
 import { NextResponse } from "next/server";
 import { deleteApiKey, getApiKeyById, updateApiKey } from "@/lib/localDb";
 import { getApiKeyDailyUsageSummary } from "@/lib/usageDb";
+import { logKeyAudit } from "@/lib/db/repos/keyAuditRepo.js";
+import { getClientIp } from "@/lib/auth/loginThrottle";
 
 function parseAllowedModels(value) {
+  if (Array.isArray(value)) return Array.from(new Set(value.map((m) => typeof m === "string" ? m.trim() : "").filter(Boolean)));
+  if (typeof value === "string") {
+    return Array.from(new Set(value.split(/[\n,]/).map((m) => m.trim()).filter(Boolean)));
+  }
+  return [];
+}
+
+function parseAllowedIps(value) {
   if (Array.isArray(value)) return Array.from(new Set(value.map((m) => typeof m === "string" ? m.trim() : "").filter(Boolean)));
   if (typeof value === "string") {
     return Array.from(new Set(value.split(/[\n,]/).map((m) => m.trim()).filter(Boolean)));
@@ -19,6 +29,30 @@ function addPolicyPatch(body, updateData) {
     }
     updateData.dailyTokenLimit = dailyTokenLimit;
   }
+  if (Object.prototype.hasOwnProperty.call(body, "monthlyTokenLimit")) {
+    const v = body.monthlyTokenLimit === "" || body.monthlyTokenLimit == null ? 0 : Number(body.monthlyTokenLimit);
+    if (!Number.isInteger(v) || v < 0) return "monthlyTokenLimit must be a non-negative integer";
+    updateData.monthlyTokenLimit = v;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "lifetimeTokenLimit")) {
+    const v = body.lifetimeTokenLimit === "" || body.lifetimeTokenLimit == null ? 0 : Number(body.lifetimeTokenLimit);
+    if (!Number.isInteger(v) || v < 0) return "lifetimeTokenLimit must be a non-negative integer";
+    updateData.lifetimeTokenLimit = v;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "requestsPerMinute")) {
+    const rpm = body.requestsPerMinute === "" || body.requestsPerMinute == null ? 0 : Number(body.requestsPerMinute);
+    if (!Number.isInteger(rpm) || rpm < 0) {
+      return "requestsPerMinute must be a non-negative integer";
+    }
+    updateData.requestsPerMinute = rpm;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "maxTokensPerRequest")) {
+    const cap = body.maxTokensPerRequest === "" || body.maxTokensPerRequest == null ? 0 : Number(body.maxTokensPerRequest);
+    if (!Number.isInteger(cap) || cap < 0) {
+      return "maxTokensPerRequest must be a non-negative integer";
+    }
+    updateData.maxTokensPerRequest = cap;
+  }
   if (Object.prototype.hasOwnProperty.call(body, "expiresAt")) {
     if (!body.expiresAt) {
       updateData.expiresAt = null;
@@ -30,6 +64,9 @@ function addPolicyPatch(body, updateData) {
   }
   if (Object.prototype.hasOwnProperty.call(body, "allowedModels")) {
     updateData.allowedModels = parseAllowedModels(body.allowedModels);
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "allowedIps")) {
+    updateData.allowedIps = parseAllowedIps(body.allowedIps);
   }
   return null;
 }
@@ -71,6 +108,13 @@ export async function PUT(request, { params }) {
     const updated = await updateApiKey(id, updateData);
     const usageToday = await getApiKeyDailyUsageSummary(updated);
 
+    await logKeyAudit({
+      keyId: id,
+      action: "update",
+      actorIp: getClientIp(request),
+      metadata: { changes: Object.keys(updateData) },
+    });
+
     return NextResponse.json({ key: { ...updated, usageToday } });
   } catch (error) {
     console.log("Error updating key:", error);
@@ -87,6 +131,12 @@ export async function DELETE(request, { params }) {
     if (!deleted) {
       return NextResponse.json({ error: "Key not found" }, { status: 404 });
     }
+
+    await logKeyAudit({
+      keyId: id,
+      action: "delete",
+      actorIp: getClientIp(request),
+    });
 
     return NextResponse.json({ message: "Key deleted successfully" });
   } catch (error) {

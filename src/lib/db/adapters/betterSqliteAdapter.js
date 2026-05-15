@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import { PRAGMA_SQL } from "../schema.js";
+import { tightenFileMode } from "@/lib/security/filePerms";
 
 // Periodic checkpoint to keep WAL file small (avoid huge -wal/-shm growth)
 const CHECKPOINT_INTERVAL_MS = 60 * 1000;
@@ -7,6 +8,10 @@ const CHECKPOINT_INTERVAL_MS = 60 * 1000;
 export function createBetterSqliteAdapter(filePath) {
   const db = new Database(filePath);
   db.exec(PRAGMA_SQL);
+  // Tighten DB file perms to 0600 (no-op on Windows ACL).
+  tightenFileMode(filePath);
+  tightenFileMode(`${filePath}-wal`);
+  tightenFileMode(`${filePath}-shm`);
   // Schema is created/synced by migrate.js after adapter init
 
   const stmtCache = new Map();

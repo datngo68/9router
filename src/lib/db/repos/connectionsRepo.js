@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
+import { encryptString, decryptString } from "@/lib/crypto/secretBox.js";
 
 const OPTIONAL_FIELDS = [
   "displayName", "email", "globalPriority", "defaultModel",
@@ -10,9 +11,59 @@ const OPTIONAL_FIELDS = [
   "consecutiveUseCount",
 ];
 
+// Top-level fields in `data` JSON that hold provider credentials.
+const ENCRYPTED_FIELDS = ["apiKey", "accessToken", "refreshToken"];
+
+// Sub-fields of `providerSpecificData` that hold provider credentials.
+const ENCRYPTED_SUB_FIELDS = [
+  "copilotToken",
+  "cookieValue",
+  "azureKey",
+  "cloudflareApiKey",
+];
+
+function encryptCredentialFields(data) {
+  if (!data || typeof data !== "object") return data;
+  for (const f of ENCRYPTED_FIELDS) {
+    if (typeof data[f] === "string" && data[f]) {
+      data[f] = encryptString(data[f]);
+    }
+  }
+  if (data.providerSpecificData && typeof data.providerSpecificData === "object") {
+    for (const f of ENCRYPTED_SUB_FIELDS) {
+      const v = data.providerSpecificData[f];
+      if (typeof v === "string" && v) {
+        data.providerSpecificData[f] = encryptString(v);
+      }
+    }
+  }
+  return data;
+}
+
+function decryptCredentialFields(data) {
+  if (!data || typeof data !== "object") return data;
+  for (const f of ENCRYPTED_FIELDS) {
+    if (typeof data[f] === "string" && data[f]) {
+      try { data[f] = decryptString(data[f]); }
+      catch (e) { console.error(`Failed to decrypt ${f} for connection:`, e.message); }
+    }
+  }
+  if (data.providerSpecificData && typeof data.providerSpecificData === "object") {
+    for (const f of ENCRYPTED_SUB_FIELDS) {
+      const v = data.providerSpecificData[f];
+      if (typeof v === "string" && v) {
+        try { data.providerSpecificData[f] = decryptString(v); }
+        catch (e) { console.error(`Failed to decrypt providerSpecificData.${f}:`, e.message); }
+      }
+    }
+  }
+  return data;
+}
+
 function rowToConn(row) {
   if (!row) return null;
   const extra = parseJson(row.data, {});
+  decryptCredentialFields(extra);
   return {
     ...extra,
     id: row.id,
@@ -29,6 +80,13 @@ function rowToConn(row) {
 
 function connToRow(c) {
   const { id, provider, authType, name, email, priority, isActive, createdAt, updatedAt, ...rest } = c;
+  // Clone before mutating so we never accidentally re-encrypt a value the
+  // caller still references.
+  const persisted = { ...rest };
+  if (persisted.providerSpecificData && typeof persisted.providerSpecificData === "object") {
+    persisted.providerSpecificData = { ...persisted.providerSpecificData };
+  }
+  encryptCredentialFields(persisted);
   return {
     id,
     provider,
@@ -37,7 +95,7 @@ function connToRow(c) {
     email: email ?? null,
     priority: priority ?? null,
     isActive: isActive === false ? 0 : 1,
-    data: stringifyJson(rest),
+    data: stringifyJson(persisted),
     createdAt,
     updatedAt,
   };

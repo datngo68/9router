@@ -77,7 +77,7 @@ describe("API key policy", () => {
     await db.saveRequestUsage({
       provider: "openai",
       model: "gpt-4o",
-      apiKey: key.key,
+      apiKeyId: key.id,
       endpoint: "/v1/chat/completions",
       status: "ok",
       tokens: { prompt_tokens: 100, completion_tokens: 50 },

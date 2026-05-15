@@ -1,16 +1,8 @@
 import { handleFetch } from "@/sse/handlers/fetch.js";
+import { handleCorsPreflight } from "@/sse/utils/cors.js";
 
-/**
- * Handle CORS preflight
- */
-export async function OPTIONS() {
-  return new Response(null, {
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "POST, OPTIONS",
-      "Access-Control-Allow-Headers": "*"
-    }
-  });
+export async function OPTIONS(request) {
+  return await handleCorsPreflight(request);
 }
 
 /**

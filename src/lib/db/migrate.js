@@ -113,15 +113,18 @@ function importLegacyMain(adapter, data) {
     );
   }
   for (const k of data.apiKeys || []) {
+    const numOrZero = (v) => Number.isFinite(Number(v)) ? Math.max(0, Math.floor(Number(v))) : 0;
     adapter.run(
-      `INSERT OR REPLACE INTO apiKeys(id, key, name, machineId, isActive, dailyTokenLimit, expiresAt, allowedModels, createdAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO apiKeys(id, key, name, machineId, isActive, dailyTokenLimit, requestsPerMinute, maxTokensPerRequest, expiresAt, allowedModels, createdAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         k.id,
         k.key,
         k.name || null,
         k.machineId || null,
         k.isActive === false ? 0 : 1,
-        Number.isFinite(Number(k.dailyTokenLimit)) ? Math.max(0, Math.floor(Number(k.dailyTokenLimit))) : 0,
+        numOrZero(k.dailyTokenLimit),
+        numOrZero(k.requestsPerMinute),
+        numOrZero(k.maxTokensPerRequest),
         k.expiresAt || null,
         stringifyJson(Array.isArray(k.allowedModels) ? Array.from(new Set(k.allowedModels.map((m) => typeof m === "string" ? m.trim() : "").filter(Boolean))) : []),
         k.createdAt || new Date().toISOString(),
