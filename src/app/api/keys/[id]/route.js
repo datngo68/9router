@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { deleteApiKey, getApiKeyById, updateApiKey } from "@/lib/localDb";
+import { getApiKeyDailyUsageSummary } from "@/lib/usageDb";
 
 function parseAllowedModels(value) {
   if (Array.isArray(value)) return Array.from(new Set(value.map((m) => typeof m === "string" ? m.trim() : "").filter(Boolean)));
@@ -68,8 +69,9 @@ export async function PUT(request, { params }) {
     }
 
     const updated = await updateApiKey(id, updateData);
+    const usageToday = await getApiKeyDailyUsageSummary(updated);
 
-    return NextResponse.json({ key: updated });
+    return NextResponse.json({ key: { ...updated, usageToday } });
   } catch (error) {
     console.log("Error updating key:", error);
     return NextResponse.json({ error: "Failed to update key" }, { status: 500 });
