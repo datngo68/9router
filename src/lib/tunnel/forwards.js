@@ -55,8 +55,31 @@ async function registerWithWorker(shortId, tunnelUrl) {
   }
 }
 
-function publicUrlFor(shortId) {
-  return `https://r${shortId}.abc-tunnel.us`;
+function publicUrlFor(entry) {
+  return `https://${getEffectiveSubdomain(entry)}.abc-tunnel.us`;
+}
+
+// Subdomain used both as worker key and in the public URL.
+// Random entries: legacy "r<shortId>" prefix.
+// Custom entries: exact value the user entered.
+function getEffectiveSubdomain(entry) {
+  return entry.customSubdomain || `r${entry.shortId}`;
+}
+
+// Loose validation: 3-32 chars, [a-z0-9-], no leading/trailing hyphen.
+const SUBDOMAIN_RE = /^[a-z0-9](?:[a-z0-9-]{1,30}[a-z0-9])?$/;
+
+function validateCustomSubdomain(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const s = String(value).trim().toLowerCase();
+  if (!SUBDOMAIN_RE.test(s)) {
+    throw new Error("Subdomain must be 3-32 chars: a-z, 0-9, hyphen (no leading/trailing hyphen)");
+  }
+  return s;
+}
+
+function isSubdomainTakenLocally(list, subdomain, excludeId) {
+  return list.some((f) => f.id !== excludeId && getEffectiveSubdomain(f) === subdomain);
 }
 
 function validateTarget(target) {
@@ -84,8 +107,10 @@ function toView(entry) {
     label: entry.label || "",
     target: entry.target,
     shortId: entry.shortId,
+    customSubdomain: entry.customSubdomain || "",
+    subdomain: getEffectiveSubdomain(entry),
     enabled: !!entry.enabled,
-    publicUrl: publicUrlFor(entry.shortId),
+    publicUrl: publicUrlFor(entry),
     tunnelUrl: activeUrls.get(entry.id) || "",
     running,
     createdAt: entry.createdAt,
@@ -102,13 +127,21 @@ export function getForward(id) {
   return toView(findById(loadForwards(), id));
 }
 
-export function createForward({ label, target } = {}) {
-  const normalized = validateTarget(target);
+export function createForward({ label, target, customSubdomain } = {}) {
+  const normalizedTarget = validateTarget(target);
+  const sub = validateCustomSubdomain(customSubdomain);
+  if (sub) {
+    const list = loadForwards();
+    if (isSubdomainTakenLocally(list, sub, null)) {
+      throw new Error(`Subdomain "${sub}" is already used by another forward on this machine`);
+    }
+  }
   const entry = {
     id: uuid(),
     label: String(label || "").slice(0, 80),
-    target: normalized,
+    target: normalizedTarget,
     shortId: generateShortId(),
+    customSubdomain: sub || "",
     enabled: false,
     createdAt: new Date().toISOString(),
   };
@@ -121,16 +154,29 @@ export async function updateForward(id, patch = {}) {
   const entry = findById(list, id);
   if (!entry) throw new Error("Forward not found");
 
-  // Disallow target/shortId change while enabled — caller must disable first.
+  // Disallow target / subdomain change while enabled — caller must disable first.
   const changingTarget = patch.target !== undefined && validateTarget(patch.target) !== entry.target;
   const regenerating = patch.regenerateShortId === true;
-  if ((changingTarget || regenerating) && entry.enabled) {
-    throw new Error("Disable the forward before changing target or regenerating URL");
+  const changingSubdomain = patch.customSubdomain !== undefined
+    && validateCustomSubdomain(patch.customSubdomain) !== (entry.customSubdomain || null)
+    && !(patch.customSubdomain === "" && !entry.customSubdomain);
+  if ((changingTarget || regenerating || changingSubdomain) && entry.enabled) {
+    throw new Error("Disable the forward before changing target, URL, or subdomain");
   }
 
   if (patch.label !== undefined) entry.label = String(patch.label || "").slice(0, 80);
   if (changingTarget) entry.target = validateTarget(patch.target);
-  if (regenerating) entry.shortId = generateShortId();
+  if (regenerating) {
+    entry.shortId = generateShortId();
+    entry.customSubdomain = ""; // regenerate clears custom override
+  }
+  if (patch.customSubdomain !== undefined) {
+    const sub = validateCustomSubdomain(patch.customSubdomain);
+    if (sub && isSubdomainTakenLocally(list, sub, id)) {
+      throw new Error(`Subdomain "${sub}" is already used by another forward on this machine`);
+    }
+    entry.customSubdomain = sub || "";
+  }
 
   persist((l) => {
     const i = l.findIndex((f) => f.id === id);
@@ -173,7 +219,7 @@ export async function enableForward(id) {
 
     const onUrlUpdate = (newUrl) => {
       activeUrls.set(id, newUrl);
-      registerWithWorker(entry.shortId, newUrl).catch(() => {});
+      registerWithWorker(getEffectiveSubdomain(entry), newUrl).catch(() => {});
     };
 
     const onExit = () => {
@@ -193,7 +239,7 @@ export async function enableForward(id) {
     childProcs.set(id, result.child);
     activeUrls.set(id, result.tunnelUrl);
     saveForwardPid(id, result.child.pid);
-    await registerWithWorker(entry.shortId, result.tunnelUrl);
+    await registerWithWorker(getEffectiveSubdomain(entry), result.tunnelUrl);
 
     // Persist enabled flag
     entry.enabled = true;

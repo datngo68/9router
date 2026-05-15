@@ -20,6 +20,7 @@ export default function PortForwardsCard() {
 
   const [newLabel, setNewLabel] = useState("");
   const [newTarget, setNewTarget] = useState("");
+  const [newSubdomain, setNewSubdomain] = useState("");
 
   const { copied, copy } = useCopyToClipboard();
 
@@ -58,13 +59,14 @@ export default function PortForwardsCard() {
       const res = await fetch("/api/tunnel/forwards", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ label: newLabel, target: newTarget }),
+        body: JSON.stringify({ label: newLabel, target: newTarget, customSubdomain: newSubdomain }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Create failed");
       setShowAddModal(false);
       setNewLabel("");
       setNewTarget("");
+      setNewSubdomain("");
       await fetchList();
     } catch (e) { setError(e.message); }
   }
@@ -123,6 +125,7 @@ export default function PortForwardsCard() {
         body: JSON.stringify({
           label: editing.label,
           target: editing.target,
+          customSubdomain: editing.customSubdomain,
           regenerateShortId: editing.regenerate === true,
         }),
       });
@@ -140,7 +143,7 @@ export default function PortForwardsCard() {
           <span className="material-symbols-outlined text-primary">lan</span>
           Port Forwarding
         </h2>
-        <Button icon="add" onClick={() => { setNewLabel(""); setNewTarget(""); setError(""); setShowAddModal(true); }}>
+        <Button icon="add" onClick={() => { setNewLabel(""); setNewTarget(""); setNewSubdomain(""); setError(""); setShowAddModal(true); }}>
           Add Forward
         </Button>
       </div>
@@ -207,6 +210,22 @@ export default function PortForwardsCard() {
               Bare port → 127.0.0.1. Use HOST:PORT to reach a LAN device.
             </p>
           </div>
+          <div>
+            <label className="text-sm font-medium block mb-1">Custom subdomain (optional)</label>
+            <div className="flex items-center gap-2">
+              <Input
+                value={newSubdomain}
+                onChange={(e) => setNewSubdomain(e.target.value)}
+                placeholder="my-app"
+                className="flex-1"
+              />
+              <span className="text-sm text-text-muted shrink-0">.abc-tunnel.us</span>
+            </div>
+            <p className="text-xs text-text-muted mt-1">
+              Leave empty for an auto-random URL. 3-32 chars: a-z, 0-9, hyphen.
+              First registered wins on the worker, so unique names recommended.
+            </p>
+          </div>
           {error && <div className="text-sm text-red-500">{error}</div>}
           <div className="flex gap-2 mt-1">
             <Button onClick={handleCreate} fullWidth>Add</Button>
@@ -266,6 +285,22 @@ export default function PortForwardsCard() {
               {editing.enabled && (
                 <p className="text-xs text-text-muted mt-1">Disable forward first to change target.</p>
               )}
+            </div>
+            <div>
+              <label className="text-sm font-medium block mb-1">Custom subdomain</label>
+              <div className="flex items-center gap-2">
+                <Input
+                  value={editing.customSubdomain || ""}
+                  onChange={(e) => setEditing({ ...editing, customSubdomain: e.target.value })}
+                  placeholder="my-app"
+                  disabled={editing.enabled}
+                  className="flex-1"
+                />
+                <span className="text-sm text-text-muted shrink-0">.abc-tunnel.us</span>
+              </div>
+              <p className="text-xs text-text-muted mt-1">
+                Empty → auto-random. 3-32 chars: a-z, 0-9, hyphen.
+              </p>
             </div>
             <label className="flex items-center gap-2 text-sm">
               <input

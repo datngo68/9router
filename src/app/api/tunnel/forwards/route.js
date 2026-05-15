@@ -13,7 +13,11 @@ export async function GET() {
 export async function POST(req) {
   try {
     const body = await req.json().catch(() => ({}));
-    const forward = createForward({ label: body.label, target: body.target });
+    const forward = createForward({
+      label: body.label,
+      target: body.target,
+      customSubdomain: body.customSubdomain,
+    });
     return NextResponse.json({ forward }, { status: 201 });
   } catch (error) {
     return NextResponse.json({ error: error.message }, { status: 400 });

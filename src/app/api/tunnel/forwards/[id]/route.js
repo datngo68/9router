@@ -28,6 +28,7 @@ export async function PATCH(req, { params }) {
     const forward = await updateForward(id, {
       label: body.label,
       target: body.target,
+      customSubdomain: body.customSubdomain,
       regenerateShortId: body.regenerateShortId === true,
     });
     return NextResponse.json({ forward });
