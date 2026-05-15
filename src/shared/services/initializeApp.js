@@ -11,6 +11,7 @@ import {
 import { killCloudflared, isCloudflaredRunning, ensureCloudflared } from "@/lib/tunnel/cloudflared";
 import { isTailscaleRunning } from "@/lib/tunnel/tailscale";
 import { loadState } from "@/lib/tunnel/state";
+import { resumeForwards } from "@/lib/tunnel/forwards";
 import { checkInternet, probeUrlAlive } from "@/lib/tunnel/networkProbe";
 import {
   RESTART_COOLDOWN_MS, NETWORK_SETTLE_MS,
@@ -45,6 +46,7 @@ const g = global.__appSingleton ??= {
   mitmStartInProgress: false,
   tunnelAutoResumed: false,
   tailscaleAutoResumed: false,
+  forwardsAutoResumed: false,
 };
 
 export async function initializeApp() {
@@ -64,6 +66,12 @@ export async function initializeApp() {
       g.tailscaleAutoResumed = true;
       console.log("[InitApp] Tailscale was enabled, auto-resuming...");
       safeRestartTailscale("startup").catch((e) => console.log("[InitApp] Tailscale resume failed:", e.message));
+    }
+
+    // Auto-resume port forwards (once per process)
+    if (!g.forwardsAutoResumed) {
+      g.forwardsAutoResumed = true;
+      resumeForwards().catch((e) => console.log("[InitApp] Forwards resume failed:", e.message));
     }
 
     if (!g.signalHandlersRegistered) {

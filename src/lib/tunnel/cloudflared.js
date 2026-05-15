@@ -433,3 +433,144 @@ export function isCloudflaredRunning() {
     return false;
   }
 }
+
+// ─── Multi-tunnel support (port forwarding) ──────────────────────────────────
+// spawnIsolatedQuickTunnel runs an INDEPENDENT cloudflared process whose
+// lifecycle is owned by the caller (e.g. forwards.js). It does NOT touch the
+// global `cloudflaredProcess` / cloudflared.pid used by the dashboard tunnel,
+// so multiple isolated tunnels can run simultaneously.
+//
+// `target` may be a port number (127.0.0.1:<port>) or "host:port" / "host" form.
+
+function normalizeTunnelTarget(target) {
+  if (typeof target === "number") return `127.0.0.1:${target}`;
+  const s = String(target || "").trim();
+  if (!s) throw new Error("Tunnel target is empty");
+  if (/^\d+$/.test(s)) return `127.0.0.1:${s}`;
+  // Allow `host:port` or bare hostname (cloudflared accepts http://host)
+  return s;
+}
+
+export async function spawnIsolatedQuickTunnel(target, onUrlUpdate, onExit) {
+  const binaryPath = await ensureCloudflared();
+  const hostPort = normalizeTunnelTarget(target);
+
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "cloudflared-fwd-"));
+  const configPath = path.join(configDir, "config.yml");
+  fs.writeFileSync(configPath, "# isolated quick-tunnel config\n", "utf8");
+
+  let isCleaned = false;
+  const cleanup = () => {
+    if (isCleaned) return;
+    isCleaned = true;
+    try { fs.rmSync(configDir, { recursive: true, force: true }); } catch (e) { /* ignore */ }
+  };
+
+  const requestedProtocol = String(process.env.TUNNEL_TRANSPORT_PROTOCOL || process.env.CLOUDFLARED_PROTOCOL || DEFAULT_QUICK_TUNNEL_PROTOCOL).trim().toLowerCase();
+  const tunnelProtocol = QUICK_TUNNEL_PROTOCOLS.has(requestedProtocol) ? requestedProtocol : DEFAULT_QUICK_TUNNEL_PROTOCOL;
+
+  const child = spawn(binaryPath, ["tunnel", "--url", `http://${hostPort}`, "--config", configPath, "--no-autoupdate"], {
+    detached: false,
+    windowsHide: true,
+    cwd: os.tmpdir(),
+    env: {
+      ...process.env,
+      TUNNEL_TRANSPORT_PROTOCOL: tunnelProtocol,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  return new Promise((resolve, reject) => {
+    let resolved = false;
+    let lastUrl = null;
+
+    function getQuickTunnelUrlFromLog(message) {
+      const regex = /https:\/\/([a-z0-9-]+)\.trycloudflare\.com/gi;
+      const candidates = [];
+      for (const match of message.matchAll(regex)) {
+        const host = match[1];
+        if (host === "api") continue;
+        candidates.push(`https://${host}.trycloudflare.com`);
+      }
+      return candidates.length ? candidates[candidates.length - 1] : null;
+    }
+
+    const timeout = setTimeout(() => {
+      if (resolved) return;
+      resolved = true;
+      cleanup();
+      try { child.kill(); } catch (e) { /* ignore */ }
+      reject(new Error("Quick tunnel timed out"));
+    }, 90000);
+
+    const handleLog = (data) => {
+      const msg = data.toString();
+      const tunnelUrl = getQuickTunnelUrlFromLog(msg);
+      if (!tunnelUrl) return;
+      if (!resolved) {
+        resolved = true;
+        lastUrl = tunnelUrl;
+        clearTimeout(timeout);
+        cleanup();
+        console.log(`[Forward] cloudflared URL (${hostPort}): ${tunnelUrl}`);
+        resolve({ child, tunnelUrl });
+        return;
+      }
+      if (tunnelUrl !== lastUrl) {
+        console.log(`[Forward] cloudflared URL changed (${hostPort}): ${tunnelUrl}`);
+        lastUrl = tunnelUrl;
+        if (onUrlUpdate) onUrlUpdate(tunnelUrl);
+      }
+    };
+
+    child.stdout.on("data", handleLog);
+    child.stderr.on("data", handleLog);
+
+    child.on("error", (err) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timeout);
+      cleanup();
+      reject(err);
+    });
+
+    child.on("exit", (code, signal) => {
+      console.log(`[Forward] cloudflared exit (${hostPort}) code=${code} signal=${signal}`);
+      cleanup();
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timeout);
+        if (code === 1) reject(new Error(`cloudflared exited with code 1. Check that ${hostPort} is reachable and that the network allows outbound HTTPS.`));
+        else if (code === 2) reject(new Error(`cloudflared exited with code 2. Check arguments.`));
+        else reject(new Error(`cloudflared exited with code ${code}`));
+        return;
+      }
+      if (onExit) onExit({ code, signal });
+    });
+  });
+}
+
+// Kill an isolated child by PID without touching global state.
+// Falls back to killCloudflaredByPort when target is provided to clean up
+// orphaned processes that lost their PID file.
+export function killIsolatedTunnel(pid, target) {
+  if (pid) {
+    try { process.kill(pid); } catch (e) { /* ignore */ }
+  }
+  if (target) {
+    const port = typeof target === "number"
+      ? target
+      : Number(String(target).split(":").pop());
+    if (Number.isFinite(port)) killCloudflaredByPort(port);
+  }
+}
+
+export function isPidAlive(pid) {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}

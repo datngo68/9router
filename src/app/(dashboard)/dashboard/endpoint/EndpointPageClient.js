@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import PropTypes from "prop-types";
 import { Card, Button, Input, Modal, CardSkeleton, Toggle, ConfirmModal, ModelMultiSelectField } from "@/shared/components";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
+import PortForwardsCard from "./PortForwardsCard";
 
 const TUNNEL_BENEFITS = [
   { icon: "public", title: "Access Anywhere", desc: "Use your API from any network" },
@@ -1103,6 +1104,9 @@ export default function APIPageClient({ machineId }) {
           </div>
         </div>
       </Card>
+
+      {/* Port Forwarding */}
+      <PortForwardsCard />
 
       {/* API Keys */}
       <Card id="require-api-key">
