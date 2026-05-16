@@ -1,4 +1,3 @@
-import { callCloudWithMachineId } from "@/shared/utils/cloud.js";
 import { handleChat } from "@/sse/handlers/chat.js";
 import { initTranslators } from "open-sse/translator/index.js";
 import { handleCorsPreflight } from "@/sse/utils/cors.js";
