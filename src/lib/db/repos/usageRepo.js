@@ -32,6 +32,22 @@ function getLocalDateKey(timestamp) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+/**
+ * Normalize provider token shapes to a single (promptTokens, completionTokens)
+ * pair so stats / quota / Recent / Details all read the same numbers.
+ *
+ * Keep quota fair: do not add cache/reasoning fields to totals because many
+ * providers already include them in input/output tokens. Cost calculation can
+ * still price cache/reasoning separately from raw token metadata.
+ */
+export function normalizeUsageTokens(tokens) {
+  const t = tokens || {};
+  return {
+    promptTokens: Number(t.prompt_tokens ?? t.input_tokens ?? 0),
+    completionTokens: Number(t.completion_tokens ?? t.output_tokens ?? 0),
+  };
+}
+
 function addToCounter(target, key, values) {
   if (!target[key]) target[key] = { requests: 0, promptTokens: 0, completionTokens: 0, cost: 0 };
   target[key].requests += values.requests || 1;
@@ -42,8 +58,7 @@ function addToCounter(target, key, values) {
 }
 
 function aggregateEntryToDay(day, entry) {
-  const promptTokens = entry.tokens?.prompt_tokens || entry.tokens?.input_tokens || 0;
-  const completionTokens = entry.tokens?.completion_tokens || entry.tokens?.output_tokens || 0;
+  const { promptTokens, completionTokens } = normalizeUsageTokens(entry.tokens);
   const cost = entry.cost || 0;
   const vals = { promptTokens, completionTokens, cost };
 
@@ -215,14 +230,13 @@ export async function getActiveRequests() {
 
   await ensureRingInitialized();
   const seen = new Set();
-  const recentRequests = [...recentRing.items]
+    const recentRequests = [...recentRing.items]
     .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
     .map((e) => {
-      const t = e.tokens || {};
+      const { promptTokens, completionTokens } = normalizeUsageTokens(e.tokens);
       return {
         timestamp: e.timestamp, model: e.model, provider: e.provider || "",
-        promptTokens: t.prompt_tokens || t.input_tokens || 0,
-        completionTokens: t.completion_tokens || t.output_tokens || 0,
+        promptTokens, completionTokens,
         status: e.status || "ok",
       };
     })
@@ -248,8 +262,7 @@ export async function saveRequestUsage(entry) {
     entry.cost = await calculateCost(entry.provider, entry.model, entry.tokens);
 
     const tokens = entry.tokens || {};
-    const promptTokens = tokens.prompt_tokens || tokens.input_tokens || 0;
-    const completionTokens = tokens.completion_tokens || tokens.output_tokens || 0;
+    const { promptTokens, completionTokens } = normalizeUsageTokens(tokens);
 
     // All 3 writes (history insert, daily upsert, lifetime counter) in ONE transaction.
     // better-sqlite3 is sync → no JS yield mid-transaction → no race in same process.
@@ -430,10 +443,10 @@ export async function getUsageStats(period = "all") {
   const recentRequests = recentRows
     .map((r) => {
       const t = parseJson(r.tokens, {}) || {};
+      const { promptTokens, completionTokens } = normalizeUsageTokens(t);
       return {
         timestamp: r.timestamp, model: r.model, provider: r.provider || "",
-        promptTokens: t.prompt_tokens || t.input_tokens || 0,
-        completionTokens: t.completion_tokens || t.output_tokens || 0,
+        promptTokens, completionTokens,
         status: r.status || "ok",
       };
     })

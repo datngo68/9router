@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 const ENDPOINTS = [
   { method: "POST", path: "/v1/chat/completions", desc: "OpenAI Chat Completions format. Hỗ trợ streaming, tools, vision, reasoning." },
@@ -15,8 +15,11 @@ const ENDPOINTS = [
   { method: "GET",  path: "/v1/models", desc: "List models khả dụng cho key của bạn." },
 ];
 
-const SNIPPETS = {
-  curl: `curl https://your-9router.com/v1/chat/completions \\
+function buildSnippets(baseUrl) {
+  const openAiBaseUrl = `${baseUrl}/v1`;
+
+  return {
+    curl: `curl ${openAiBaseUrl}/chat/completions \\
   -H "Authorization: Bearer $NINEROUTER_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
@@ -24,10 +27,10 @@ const SNIPPETS = {
     "messages": [{"role": "user", "content": "Hello"}],
     "stream": false
   }'`,
-  "openai-py": `from openai import OpenAI
+    "openai-py": `from openai import OpenAI
 
 client = OpenAI(
-    base_url="https://your-9router.com/v1",
+    base_url="${openAiBaseUrl}",
     api_key="$NINEROUTER_KEY",
 )
 
@@ -36,10 +39,10 @@ resp = client.chat.completions.create(
     messages=[{"role": "user", "content": "Hello"}],
 )
 print(resp.choices[0].message.content)`,
-  "openai-node": `import OpenAI from "openai";
+    "openai-node": `import OpenAI from "openai";
 
 const client = new OpenAI({
-  baseURL: "https://your-9router.com/v1",
+  baseURL: "${openAiBaseUrl}",
   apiKey: process.env.NINEROUTER_KEY,
 });
 
@@ -48,10 +51,10 @@ const resp = await client.chat.completions.create({
   messages: [{ role: "user", content: "Hello" }],
 });
 console.log(resp.choices[0].message.content);`,
-  "anthropic-py": `import anthropic
+    "anthropic-py": `import anthropic
 
 client = anthropic.Anthropic(
-    base_url="https://your-9router.com",
+    base_url="${baseUrl}",
     api_key="$NINEROUTER_KEY",
 )
 
@@ -61,7 +64,8 @@ resp = client.messages.create(
     messages=[{"role": "user", "content": "Hello"}],
 )
 print(resp.content[0].text)`,
-};
+  };
+}
 
 const RATE_HEADERS = [
   { name: "X-Api-Key-Token-Limit", desc: "Daily token cap của key (0 = không giới hạn)." },
@@ -88,6 +92,12 @@ function CodeBlock({ children }) {
 
 export default function DocsPage() {
   const [snippet, setSnippet] = useState("curl");
+  const [baseUrl, setBaseUrl] = useState("https://your-9router.com");
+  const snippets = useMemo(() => buildSnippets(baseUrl), [baseUrl]);
+
+  useEffect(() => {
+    setBaseUrl(window.location.origin);
+  }, []);
 
   return (
     <div className="flex flex-col gap-10">
@@ -117,7 +127,7 @@ export default function DocsPage() {
             >{t.label}</button>
           ))}
         </div>
-        <CodeBlock>{SNIPPETS[snippet]}</CodeBlock>
+        <CodeBlock>{snippets[snippet]}</CodeBlock>
       </section>
 
       <section>
