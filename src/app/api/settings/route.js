@@ -15,8 +15,11 @@ const SETTINGS_RESPONSE_HEADERS = {
 export async function GET() {
   try {
     const settings = await getSettings();
-    const { password, oidcClientSecret, ...safeSettings } = settings;
+    const { password, oidcClientSecret, telegramBotToken, telegramWebhookSecret, smtpPass, ...safeSettings } = settings;
     safeSettings.oidcConfigured = !!(safeSettings.oidcIssuerUrl && safeSettings.oidcClientId && oidcClientSecret);
+    safeSettings.hasTelegramBotToken = !!telegramBotToken;
+    safeSettings.hasTelegramWebhookSecret = !!telegramWebhookSecret;
+    safeSettings.hasSmtpPass = !!smtpPass;
     
     const enableRequestLogs = process.env.ENABLE_REQUEST_LOGS === "true";
     const enableTranslator = process.env.ENABLE_TRANSLATOR === "true";
@@ -81,6 +84,14 @@ export async function PATCH(request) {
       }
     }
 
+    // Storefront sensitive setters: ignore empty values so admin doesn't
+    // accidentally wipe them by re-saving a sanitized form.
+    for (const k of ["telegramBotToken", "smtpPass"]) {
+      if (Object.prototype.hasOwnProperty.call(body, k)) {
+        if (!body[k] || !String(body[k]).trim()) delete body[k];
+      }
+    }
+
     const settings = await updateSettings(body);
 
     // Apply outbound proxy settings immediately (no restart required)
@@ -101,8 +112,11 @@ export async function PATCH(request) {
       resetComboRotation();
     }
 
-    const { password, oidcClientSecret, ...safeSettings } = settings;
+    const { password, oidcClientSecret, telegramBotToken, telegramWebhookSecret, smtpPass, ...safeSettings } = settings;
     safeSettings.oidcConfigured = !!(safeSettings.oidcIssuerUrl && safeSettings.oidcClientId && oidcClientSecret);
+    safeSettings.hasTelegramBotToken = !!telegramBotToken;
+    safeSettings.hasTelegramWebhookSecret = !!telegramWebhookSecret;
+    safeSettings.hasSmtpPass = !!smtpPass;
     return NextResponse.json(safeSettings, { headers: SETTINGS_RESPONSE_HEADERS });
   } catch (error) {
     console.log("Error updating settings:", error);

@@ -38,6 +38,7 @@ import {
 import { consumeRequest } from "../services/apiKeyRateLimit.js";
 import { checkIpAllowlist } from "../services/ipAllowlist.js";
 import { getClientIp } from "@/lib/auth/loginThrottle.js";
+import { hasValidCliToken, isLoopbackRequest } from "@/lib/auth/cliToken.js";
 
 const SENSITIVE_HEADER_PATTERNS = ["authorization", "x-api-key", "cookie", "set-cookie", "x-auth-token"];
 
@@ -110,7 +111,12 @@ export async function handleChat(request, clientRawRequest = null) {
   const settings = await getSettings();
   let apiKeyRecord = null;
   let reservationId = null;
-  if (settings.requireApiKey) {
+  // Loopback CLI bypass: requests originating from this host (model test
+  // endpoints, MCP bridge, etc.) carry x-9r-cli-token derived from the
+  // machine ID. Skip requireApiKey for those — quota/policy checks below
+  // are also skipped naturally because apiKeyRecord stays null.
+  const cliBypass = isLoopbackRequest(request) && (await hasValidCliToken(request));
+  if (settings.requireApiKey && !cliBypass) {
     if (!apiKey) {
       log.warn("AUTH", "Missing API key (requireApiKey=true)");
       return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");

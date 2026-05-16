@@ -1,7 +1,39 @@
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
+import { encryptString, decryptString, isEncrypted } from "@/lib/crypto/secretBox.js";
 
 const DEFAULT_MITM_ROUTER_BASE = "http://localhost:20128";
+
+// Sensitive settings encrypted at rest (Phase 2.1 storefront extension).
+const ENCRYPTED_SETTING_KEYS = [
+  "telegramBotToken",
+  "telegramWebhookSecret",
+  "smtpPass",
+];
+
+function encryptSensitive(data) {
+  if (!data || typeof data !== "object") return data;
+  const out = { ...data };
+  for (const k of ENCRYPTED_SETTING_KEYS) {
+    if (typeof out[k] === "string" && out[k] && !isEncrypted(out[k])) {
+      try { out[k] = encryptString(out[k]); }
+      catch (e) { console.error(`encryptSensitive ${k}:`, e.message); }
+    }
+  }
+  return out;
+}
+
+function decryptSensitive(data) {
+  if (!data || typeof data !== "object") return data;
+  const out = { ...data };
+  for (const k of ENCRYPTED_SETTING_KEYS) {
+    if (typeof out[k] === "string" && isEncrypted(out[k])) {
+      try { out[k] = decryptString(out[k]); }
+      catch (e) { console.error(`decryptSensitive ${k}:`, e.message); }
+    }
+  }
+  return out;
+}
 
 const DEFAULT_SETTINGS = {
   cloudEnabled: false,
@@ -41,7 +73,7 @@ const DEFAULT_SETTINGS = {
 async function readRaw() {
   const db = await getAdapter();
   const row = db.get(`SELECT data FROM settings WHERE id = 1`);
-  return row ? parseJson(row.data, {}) : {};
+  return row ? decryptSensitive(parseJson(row.data, {})) : {};
 }
 
 // Merge raw settings with defaults; backward-compat for missing keys
@@ -74,11 +106,12 @@ export async function updateSettings(updates) {
   let next;
   db.transaction(() => {
     const row = db.get(`SELECT data FROM settings WHERE id = 1`);
-    const current = row ? parseJson(row.data, {}) : {};
+    const current = row ? decryptSensitive(parseJson(row.data, {})) : {};
     next = { ...current, ...updates };
+    const persisted = encryptSensitive(next);
     db.run(
       `INSERT INTO settings(id, data) VALUES(1, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data`,
-      [stringifyJson(next)]
+      [stringifyJson(persisted)]
     );
   });
   return mergeWithDefaults(next);
@@ -100,7 +133,7 @@ export async function getCloudUrl() {
 }
 
 // Fields that are sensitive secrets and must never appear in exports/backups.
-const SECRET_KEYS = ["password", "oidcClientSecret"];
+const SECRET_KEYS = ["password", "oidcClientSecret", "telegramBotToken", "telegramWebhookSecret", "smtpPass"];
 
 export async function exportSettings({ includeSecrets = false } = {}) {
   const raw = await readRaw();

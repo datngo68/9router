@@ -29,13 +29,38 @@ export {
 
 // API keys
 export {
-  getApiKeys, getApiKeyById, getApiKeyByKey, createApiKey, updateApiKey, deleteApiKey, validateApiKey,
+  getApiKeys, getApiKeyById, getApiKeyByKey, getApiKeysByCustomer, createApiKey, updateApiKey, deleteApiKey, validateApiKey,
 } from "./repos/apiKeysRepo.js";
 
 // API key audit log
 export {
   logKeyAudit, getKeyAuditLog,
 } from "./repos/keyAuditRepo.js";
+
+// Storefront — customers
+export {
+  getCustomers, getCustomerById, findCustomerByEmail,
+  createCustomer, verifyCustomerPassword, setCustomerPassword,
+  updateCustomer, markEmailVerified, deleteCustomer,
+} from "./repos/customersRepo.js";
+
+// Storefront — customer sessions
+export {
+  hashToken, createCustomerSession, findCustomerSessionByToken,
+  revokeCustomerSession, revokeAllSessionsForCustomer, pruneExpiredSessions,
+} from "./repos/customerSessionsRepo.js";
+
+// Storefront — pricing plans
+export {
+  getPricingPlans, getPricingPlanById, createPricingPlan,
+  updatePricingPlan, deletePricingPlan, planToApiKeyPolicy,
+} from "./repos/pricingPlansRepo.js";
+
+// Storefront — orders
+export {
+  createOrder, getOrderById, getOrders,
+  cancelOrder, markOrderRefunded, confirmOrderAtomic,
+} from "./repos/ordersRepo.js";
 
 // Combos
 export {

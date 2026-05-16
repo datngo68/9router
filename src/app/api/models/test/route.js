@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
-import { getApiKeys } from "@/lib/localDb";
 import { UPDATER_CONFIG } from "@/shared/constants/config";
+import { CLI_TOKEN_HEADER, getCliToken } from "@/lib/auth/cliToken";
 
-// POST /api/models/test - Ping a single model via internal completions or embeddings
+// POST /api/models/test - Ping a single model via internal completions or embeddings.
+// Uses the loopback CLI token to bypass requireApiKey on the internal call;
+// raw API keys are no longer retrievable from the DB after the keyHash migration.
 export async function POST(request) {
   try {
     const { model, kind } = await request.json();
@@ -10,15 +12,9 @@ export async function POST(request) {
 
     const baseUrl = `http://127.0.0.1:${process.env.PORT || UPDATER_CONFIG.appPort}`;
 
-    // Get an active internal API key for auth (if requireApiKey is enabled)
-    let apiKey = null;
-    try {
-      const keys = await getApiKeys();
-      apiKey = keys.find((k) => k.isActive !== false)?.key || null;
-    } catch {}
-
+    const cliToken = await getCliToken();
     const headers = { "Content-Type": "application/json" };
-    if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+    if (cliToken) headers[CLI_TOKEN_HEADER] = cliToken;
 
     const start = Date.now();
 

@@ -27,6 +27,14 @@ const navItems = [
   { href: "/dashboard/cli-tools", label: "CLI Tools", icon: "terminal" },
 ];
 
+const salesItems = [
+  { href: "/dashboard/orders", label: "Orders", icon: "receipt_long" },
+  { href: "/dashboard/customers", label: "Customers", icon: "groups" },
+  { href: "/dashboard/pricing", label: "Pricing Plans", icon: "sell" },
+  { href: "/dashboard/revenue", label: "Revenue", icon: "trending_up" },
+  { href: "/dashboard/settings/store", label: "Store Settings", icon: "tune" },
+];
+
 const debugItems = [
   { href: "/dashboard/console-log", label: "Console Log", icon: "terminal" },
   { href: "/dashboard/translator", label: "Translator", icon: "translate" },
@@ -251,6 +259,32 @@ export default function Sidebar({ onClose }) {
             )}
 
             {systemItems.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                onClick={onClose}
+                className={cn(
+                  "flex items-center gap-3 px-3 py-1 rounded-lg transition-all group",
+                  isActive(item.href)
+                    ? "bg-primary/10 text-primary"
+                    : "text-text-muted hover:bg-surface-2 hover:text-text-main"
+                )}
+              >
+                <span
+                  className={cn(
+                    "material-symbols-outlined text-[18px]",
+                    isActive(item.href) ? "fill-1" : "group-hover:text-primary transition-colors"
+                  )}
+                >
+                  {item.icon}
+                </span>
+                <span className="text-[13px] font-medium">{item.label}</span>
+              </Link>
+            ))}
+
+            {/* Sales section */}
+            <div className="mt-3 px-3 text-[10px] uppercase tracking-wider text-text-muted/60">Sales</div>
+            {salesItems.map((item) => (
               <Link
                 key={item.href}
                 href={item.href}

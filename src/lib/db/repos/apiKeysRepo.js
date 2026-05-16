@@ -92,8 +92,17 @@ function rowToKey(row) {
     expiresAt: normalizeExpiresAt(row.expiresAt),
     allowedModels: normalizeAllowedModels(row.allowedModels),
     allowedIps: normalizeAllowedIps(row.allowedIps),
+    customerId: row.customerId || null,
+    orderId: row.orderId || null,
     createdAt: row.createdAt,
   };
+}
+
+export async function getApiKeysByCustomer(customerId) {
+  if (!customerId) return [];
+  const db = await getAdapter();
+  const rows = db.all(`SELECT * FROM apiKeys WHERE customerId = ? ORDER BY createdAt DESC`, [customerId]);
+  return rows.map(rowToKey);
 }
 
 export async function getApiKeys() {

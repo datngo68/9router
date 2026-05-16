@@ -9,6 +9,8 @@
 // In-memory:
 //   childProcs: Map<id, ChildProcess>   ← live cloudflared processes
 //   activeUrls: Map<id, tunnelUrl>      ← last known random *.trycloudflare.com
+//   lastRestartAt: Map<id, number>      ← cooldown gate for watchdog
+//   missCounts:   Map<id, number>       ← consecutive unreachable probes
 
 import crypto from "crypto";
 import {
@@ -18,12 +20,22 @@ import {
 import {
   spawnIsolatedQuickTunnel, killIsolatedTunnel, isPidAlive,
 } from "./cloudflared.js";
+import { probeUrlAlive, checkInternet } from "./networkProbe.js";
 
 const WORKER_URL = process.env.TUNNEL_WORKER_URL || "https://abc-tunnel.us";
+
+// Watchdog tuning
+const FORWARD_RESTART_COOLDOWN_MS = 60000;   // min gap between auto-restart attempts per forward
+const FORWARD_MISS_THRESHOLD = 2;             // consecutive failed probes before restart
+const REGISTER_RETRY_BACKOFF_MS = [500, 1500, 4000];
+const ON_EXIT_RESPAWN_DELAY_MS = 3000;        // debounce for crash → respawn
 
 const childProcs = new Map();   // id -> child process
 const activeUrls = new Map();   // id -> last tunnelUrl
 const inFlight = new Map();     // id -> Promise (guards concurrent enable)
+const lastRestartAt = new Map(); // id -> ts of last auto-restart attempt
+const missCounts = new Map();    // id -> consecutive miss count
+const disabling = new Set();    // ids currently being torn down by user → onExit must skip respawn
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -44,15 +56,26 @@ function persist(updater) {
 }
 
 async function registerWithWorker(shortId, tunnelUrl) {
-  try {
-    await fetch(`${WORKER_URL}/api/tunnel/register`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ shortId, tunnelUrl }),
-    });
-  } catch (e) {
-    console.warn(`[Forward] worker register failed (${shortId}): ${e.message}`);
+  // Retry with backoff so a transient worker hiccup doesn't leave a stale
+  // mapping (which surfaces as Cloudflare Error 1016 to end users).
+  let lastErr = null;
+  for (let i = 0; i < REGISTER_RETRY_BACKOFF_MS.length; i++) {
+    try {
+      const res = await fetch(`${WORKER_URL}/api/tunnel/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ shortId, tunnelUrl }),
+        signal: AbortSignal.timeout(8000),
+      });
+      if (res.ok) return true;
+      lastErr = new Error(`status ${res.status}`);
+    } catch (e) {
+      lastErr = e;
+    }
+    await new Promise((r) => setTimeout(r, REGISTER_RETRY_BACKOFF_MS[i]));
   }
+  console.warn(`[Forward] worker register failed (${shortId}): ${lastErr?.message || "unknown"}`);
+  return false;
 }
 
 function publicUrlFor(entry) {
@@ -200,6 +223,8 @@ export async function deleteForward(id) {
     if (i >= 0) l.splice(i, 1);
   });
   clearForwardPid(id);
+  missCounts.delete(id);
+  lastRestartAt.delete(id);
   return { success: true };
 }
 
@@ -227,13 +252,26 @@ export async function enableForward(id) {
 
     const onUrlUpdate = (newUrl) => {
       activeUrls.set(id, newUrl);
+      missCounts.set(id, 0);
       registerWithWorker(getWorkerKey(entry), newUrl).catch(() => {});
     };
 
     const onExit = () => {
       childProcs.delete(id);
       clearForwardPid(id);
-      // Keep `enabled=true` in storage so watchdog/auto-resume can revive it.
+      activeUrls.delete(id);
+      // User-initiated disable → don't bounce back.
+      if (disabling.has(id)) {
+        console.log(`[Forward] cloudflared exited for ${id} (disable)`);
+        return;
+      }
+      console.log(`[Forward] cloudflared exited unexpectedly for ${id} (${entry.target}) — respawning`);
+      // Quick respawn with a short debounce. Watchdog will catch it later if this fails.
+      setTimeout(() => {
+        const fresh = findById(loadForwards(), id);
+        if (!fresh || !fresh.enabled) return;
+        _hardRestartForward(id, "crash").catch(() => {});
+      }, ON_EXIT_RESPAWN_DELAY_MS);
     };
 
     let result;
@@ -246,6 +284,7 @@ export async function enableForward(id) {
 
     childProcs.set(id, result.child);
     activeUrls.set(id, result.tunnelUrl);
+    missCounts.set(id, 0);
     saveForwardPid(id, result.child.pid);
     await registerWithWorker(getWorkerKey(entry), result.tunnelUrl);
 
@@ -271,22 +310,34 @@ export async function disableForward(id) {
   const list = loadForwards();
   const entry = findById(list, id);
 
-  const child = childProcs.get(id);
-  if (child) {
-    try { child.kill(); } catch (e) { /* ignore */ }
-    childProcs.delete(id);
-  }
-  const pid = loadForwardPid(id);
-  killIsolatedTunnel(pid, entry?.target);
-  clearForwardPid(id);
-  activeUrls.delete(id);
+  // Mark disabling FIRST so onExit (fired by child.kill) skips respawn.
+  disabling.add(id);
 
+  // Persist enabled=false BEFORE killing, so any watchdog tick that lands
+  // mid-teardown sees the correct intent.
   if (entry) {
     entry.enabled = false;
     persist((l) => {
       const i = l.findIndex((f) => f.id === id);
       if (i >= 0) l[i] = entry;
     });
+  }
+
+  try {
+    const child = childProcs.get(id);
+    if (child) {
+      try { child.kill(); } catch (e) { /* ignore */ }
+      childProcs.delete(id);
+    }
+    const pid = loadForwardPid(id);
+    killIsolatedTunnel(pid, entry?.target);
+    clearForwardPid(id);
+    activeUrls.delete(id);
+    missCounts.delete(id);
+    lastRestartAt.delete(id);
+  } finally {
+    // Keep guard up briefly so any late onExit still sees disabling.
+    setTimeout(() => disabling.delete(id), ON_EXIT_RESPAWN_DELAY_MS + 1000);
   }
   return { success: true };
 }
@@ -308,8 +359,112 @@ export async function resumeForwards() {
   }
 }
 
+// ─── Watchdog ────────────────────────────────────────────────────────────────
+// Called periodically by initializeApp. For each enabled forward:
+//   - if process dead → respawn (cooldown-gated)
+//   - if process alive but URL unreachable for N ticks → respawn
+//   - re-register URL with worker so a stale mapping (Error 1016) self-heals
+//
+// Skip when no internet (avoid pointless restart loops on offline).
+
+async function _shouldSkipRestart(id) {
+  if (inFlight.has(id)) return true;
+  const last = lastRestartAt.get(id) || 0;
+  if (Date.now() - last < FORWARD_RESTART_COOLDOWN_MS) return true;
+  return false;
+}
+
+async function _hardRestartForward(id, reason) {
+  if (await _shouldSkipRestart(id)) return false;
+  lastRestartAt.set(id, Date.now());
+  console.log(`[Forward] restart ${id} (${reason})`);
+
+  // Tear down current process without flipping enabled=false (preserve user intent).
+  const child = childProcs.get(id);
+  if (child) { try { child.kill(); } catch (e) { /* ignore */ } }
+  childProcs.delete(id);
+  const pid = loadForwardPid(id);
+  const list = loadForwards();
+  const entry = findById(list, id);
+  killIsolatedTunnel(pid, entry?.target);
+  clearForwardPid(id);
+  activeUrls.delete(id);
+  missCounts.set(id, 0);
+
+  try {
+    await enableForward(id);
+    console.log(`[Forward] restart success ${id}`);
+    return true;
+  } catch (e) {
+    console.warn(`[Forward] restart failed ${id}: ${e.message}`);
+    return false;
+  }
+}
+
+/** Tick health for every enabled forward. Safe to call concurrently. */
+export async function tickForwardsHealth() {
+  const list = loadForwards();
+  const enabled = list.filter((e) => e.enabled);
+  if (enabled.length === 0) return;
+  if (!await checkInternet()) return; // offline → skip
+
+  for (const entry of enabled) {
+    const id = entry.id;
+    const pid = loadForwardPid(id);
+    const procAlive = isPidAlive(pid) && childProcs.has(id);
+
+    if (!procAlive) {
+      // Process is gone — respawn (cooldown-gated).
+      _hardRestartForward(id, "process-dead").catch(() => {});
+      continue;
+    }
+
+    // Process alive — probe public URL. We probe the public abc-tunnel.us URL
+    // (not the *.trycloudflare.com one) because that's what users actually hit;
+    // it also exercises the worker mapping, so a stale mapping triggers re-register.
+    const publicUrl = publicUrlFor(entry);
+    const ok = await probeUrlAlive(publicUrl);
+    if (ok) {
+      missCounts.set(id, 0);
+      // Opportunistic re-register every successful tick: cheap, idempotent,
+      // and prevents the worker from holding a wrong URL after silent rotations.
+      const url = activeUrls.get(id);
+      if (url) registerWithWorker(getWorkerKey(entry), url).catch(() => {});
+      continue;
+    }
+
+    const misses = (missCounts.get(id) || 0) + 1;
+    missCounts.set(id, misses);
+    if (misses < FORWARD_MISS_THRESHOLD) continue;
+
+    // First try: re-register the existing URL (fixes 1016 from stale mapping).
+    const url = activeUrls.get(id);
+    if (url) {
+      const reRegistered = await registerWithWorker(getWorkerKey(entry), url);
+      if (reRegistered && await probeUrlAlive(publicUrl)) {
+        missCounts.set(id, 0);
+        console.log(`[Forward] re-register healed ${id}`);
+        continue;
+      }
+    }
+
+    // Still bad → hard restart cloudflared (fixes 530 + dead trycloudflare host).
+    _hardRestartForward(id, "url-unreachable").catch(() => {});
+  }
+}
+
+/** Restart all enabled forwards (used on network change / sleep-wake). */
+export async function restartAllForwards(reason = "external") {
+  const list = loadForwards().filter((e) => e.enabled);
+  for (const entry of list) {
+    // Reset cooldown so the network event can force a restart.
+    lastRestartAt.delete(entry.id);
+    _hardRestartForward(entry.id, reason).catch(() => {});
+  }
+}
+
 // ─── Test hook ───────────────────────────────────────────────────────────────
 
 export function _internals() {
-  return { childProcs, activeUrls, inFlight };
+  return { childProcs, activeUrls, inFlight, lastRestartAt, missCounts, disabling };
 }

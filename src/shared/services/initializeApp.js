@@ -11,7 +11,7 @@ import {
 import { killCloudflared, isCloudflaredRunning, ensureCloudflared } from "@/lib/tunnel/cloudflared";
 import { isTailscaleRunning } from "@/lib/tunnel/tailscale";
 import { loadState } from "@/lib/tunnel/state";
-import { resumeForwards } from "@/lib/tunnel/forwards";
+import { resumeForwards, tickForwardsHealth, restartAllForwards } from "@/lib/tunnel/forwards";
 import { checkInternet, probeUrlAlive } from "@/lib/tunnel/networkProbe";
 import {
   RESTART_COOLDOWN_MS, NETWORK_SETTLE_MS,
@@ -193,6 +193,7 @@ function startWatchdog() {
   g.watchdogInterval = setInterval(() => {
     safeRestartTunnel("watchdog").catch(() => {});
     safeRestartTailscale("watchdog").catch(() => {});
+    tickForwardsHealth().catch(() => {});
   }, WATCHDOG_INTERVAL_MS);
   if (g.watchdogInterval.unref) g.watchdogInterval.unref();
 }
@@ -249,6 +250,7 @@ function startNetworkMonitor() {
         : wasSleep ? "sleep" : "netchange";
       safeRestartTunnel(reason).catch(() => {});
       safeRestartTailscale(reason).catch(() => {});
+      restartAllForwards(reason).catch(() => {});
     } catch (err) {
       console.log("[NetworkMonitor] error:", err.message);
     }

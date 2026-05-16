@@ -29,10 +29,21 @@ const PUBLIC_API_PATHS = [
   "/api/auth/oidc",
   "/api/version",
   "/api/settings/require-login",
+  // Storefront public
+  "/api/store",
+  // Customer auth (login/register/forgot/reset). Logged-in account routes
+  // verify session inside the handler.
+  "/api/account/login",
+  "/api/account/register",
+  "/api/account/forgot",
+  "/api/account/reset",
+  // Telegram webhook — verifies its own secret in the handler.
+  "/api/telegram/webhook",
 ];
 
-// Public top-level prefixes (LLM API endpoints with their own API key auth).
-const PUBLIC_PREFIXES = ["/v1", "/v1beta"];
+// Public top-level prefixes (LLM API endpoints with their own API key auth,
+// plus the storefront site for unauthenticated browsing).
+const PUBLIC_PREFIXES = ["/v1", "/v1beta", "/store"];
 
 // Always require JWT token regardless of requireLogin setting
 const ALWAYS_PROTECTED = [
@@ -42,27 +53,6 @@ const ALWAYS_PROTECTED = [
   "/api/version/update",
   "/api/oauth/cursor/auto-import",
   "/api/oauth/kiro/auto-import",
-];
-
-// Require auth, but allow through if requireLogin is disabled
-const PROTECTED_API_PATHS = [
-  "/api/settings",
-  "/api/keys",
-  "/api/providers",
-  "/api/provider-nodes",
-  "/api/proxy-pools",
-  "/api/combos",
-  "/api/models",
-  "/api/usage",
-  "/api/oauth",
-  "/api/cloud",
-  "/api/media-providers",
-  "/api/pricing",
-  "/api/tags",
-  "/api/cli-tools",
-  "/api/mcp",
-  "/api/translator",
-  "/api/tunnel",
 ];
 
 // Routes that spawn child processes or read host secrets — restrict to localhost.
@@ -82,8 +72,6 @@ function isLoopbackHostname(h) {
   return LOOPBACK_HOSTS.has(name);
 }
 
-// Same-host gate: Host header must be loopback AND (if present) Origin must match.
-// Defends against tunnel/LAN access, remote browser CSRF, and cross-site form posts.
 function isLocalRequest(request) {
   if (!isLoopbackHostname(request.headers.get("host"))) return false;
   const origin = request.headers.get("origin");
@@ -100,7 +88,6 @@ async function hasValidToken(request) {
   return await verifyDashboardAuthToken(token);
 }
 
-// Read settings directly from DB to avoid self-fetch deadlock in proxy
 async function loadSettings() {
   try {
     return await getSettings();
@@ -121,6 +108,72 @@ function isPublicApi(pathname) {
   return PUBLIC_API_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 }
 
+const ADMIN_ENDPOINTS = ["/dashboard", "/login", "/api/admin"];
+
+/**
+ * Decide whether the current request hostname is allowed to serve admin
+ * endpoints. When `settings.adminHosts` is set, only those exact hostnames
+ * (case-insensitive) get admin surface. Loopback is always allowed so the
+ * operator can reach the dashboard locally for emergencies.
+ *
+ * `settings.adminHosts` example: "admin.example.com,internal.example.com"
+ */
+function normalizeHostInput(raw) {
+  if (!raw) return "";
+  let s = String(raw).trim().toLowerCase();
+  // Strip scheme (http://, https://) the operator may have pasted.
+  s = s.replace(/^https?:\/\//, "");
+  // Drop path/query and trailing slashes.
+  s = s.replace(/[/?#].*$/, "");
+  // Drop port.
+  s = s.split(":")[0];
+  return s;
+}
+
+function isAdminHostAllowed(request, settings) {
+  if (!settings) return true;
+  const host = (request.headers.get("host") || "").split(":")[0].toLowerCase();
+  if (isLoopbackHostname(host)) return true;
+  const raw = settings.adminHosts;
+  if (!raw || !String(raw).trim()) return true; // not configured → no restriction
+  const allowed = String(raw)
+    .split(/[,\s]+/)
+    .map(normalizeHostInput)
+    .filter(Boolean);
+  if (allowed.length === 0) return true;
+  return allowed.includes(host);
+}
+
+function isAdminPath(pathname) {
+  return ADMIN_ENDPOINTS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+}
+
+/**
+ * If `settings.adminPathPrefix` is set (e.g. "x9k2"), the admin login page
+ * is reachable only at `/<prefix>` or `/<prefix>/login`. The proxy rewrites
+ * those to `/login` internally. `/login` accessed directly without prefix
+ * AND without a valid cookie returns 404 — bot scanners see no admin surface.
+ *
+ * Once a valid `auth_token` cookie is present, the admin SPA links to
+ * `/dashboard/...` and `/login` directly without the prefix; that's allowed
+ * because the cookie proves the operator already passed the gate.
+ */
+function normalizePrefix(prefix) {
+  const v = String(prefix || "").trim().replace(/^\/+|\/+$/g, "");
+  if (!v) return "";
+  if (!/^[A-Za-z0-9_-]+$/.test(v)) return "";
+  return v;
+}
+
+function loginPathFromPrefix(pathname, prefix) {
+  if (!prefix) return null;
+  const root = `/${prefix}`;
+  if (pathname === root || pathname === `${root}/`) return "/login";
+  if (pathname === `${root}/login`) return "/login";
+  if (pathname.startsWith(`${root}/login/`)) return pathname.slice(root.length);
+  return null;
+}
+
 export async function proxy(request) {
   const { pathname } = request.nextUrl;
 
@@ -128,6 +181,35 @@ export async function proxy(request) {
   if (LOCAL_ONLY_PATHS.some((p) => pathname.startsWith(p))) {
     if (!isLocalRequest(request)) {
       return NextResponse.json({ error: "Local only: loopback access required" }, { status: 403 });
+    }
+  }
+
+  const settings = await loadSettings();
+  const adminPrefix = normalizePrefix(settings?.adminPathPrefix);
+
+  // Hostname gate: hide admin surface from public storefront hostname.
+  // If adminHosts is configured and current host doesn't match, deny dashboard,
+  // login and /api/admin/*. Returns 404 to avoid leaking that an admin lives here.
+  if (isAdminPath(pathname) && !isAdminHostAllowed(request, settings)) {
+    return new NextResponse("Not found", { status: 404 });
+  }
+
+  // Admin path prefix gate. Only applies if both host check passed AND
+  // operator configured a prefix. Loopback bypasses prefix entirely so the
+  // operator can always recover from the local machine.
+  if (adminPrefix && !isLoopbackHostname((request.headers.get("host") || "").split(":")[0])) {
+    const rewriteTo = loginPathFromPrefix(pathname, adminPrefix);
+    if (rewriteTo) {
+      const url = request.nextUrl.clone();
+      url.pathname = rewriteTo;
+      return NextResponse.rewrite(url);
+    }
+    // Direct /login (without prefix) is 404 unless the user already has a
+    // valid cookie — that proves they passed the gate before.
+    if (pathname === "/login" || pathname.startsWith("/login/")) {
+      if (!(await hasValidToken(request))) {
+        return new NextResponse("Not found", { status: 404 });
+      }
     }
   }
 
@@ -141,6 +223,9 @@ export async function proxy(request) {
   // Deny-by-default for /api/* — public allow-list bypasses, everything else requires auth.
   if (pathname.startsWith("/api/")) {
     if (isPublicApi(pathname)) return NextResponse.next();
+    // Customer routes verify session in-handler — bypass admin auth.
+    if (pathname.startsWith("/api/account/") || pathname === "/api/account") return NextResponse.next();
+    if (pathname.startsWith("/api/orders/") || pathname === "/api/orders") return NextResponse.next();
     if (await hasValidCliToken(request) || await isAuthenticated(request))
       return NextResponse.next();
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -152,7 +237,6 @@ export async function proxy(request) {
     let tunnelDashboardAccess = true;
 
     try {
-      const settings = await loadSettings();
       if (settings) {
         requireLogin = settings.requireLogin !== false;
         tunnelDashboardAccess = settings.tunnelDashboardAccess === true;
@@ -187,9 +271,23 @@ export async function proxy(request) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
-  // Redirect / to /dashboard if logged in, or /dashboard if it's the root
+  // Redirect / based on hostname:
+  //   - admin host     → /dashboard  (operator default landing) — only if
+  //     they already authenticated. Otherwise: redirect to admin login (with
+  //     prefix obscure if configured; raw /login if not).
+  //   - storefront host → /store     (customer-facing default)
+  //   - public-only host without admin allowlisted → /store
   if (pathname === "/") {
-    return NextResponse.redirect(new URL("/dashboard", request.url));
+    if (settings && !isAdminHostAllowed(request, settings)) {
+      return NextResponse.redirect(new URL("/store", request.url));
+    }
+    if (await hasValidToken(request)) {
+      return NextResponse.redirect(new URL("/dashboard", request.url));
+    }
+    if (adminPrefix) {
+      return NextResponse.redirect(new URL(`/${adminPrefix}`, request.url));
+    }
+    return NextResponse.redirect(new URL("/login", request.url));
   }
 
   return NextResponse.next();
