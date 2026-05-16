@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import crypto from "node:crypto";
 import { getSettings } from "@/lib/localDb";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
 import { verifyDashboardAuthToken } from "@/lib/auth/dashboardSession";
@@ -149,15 +150,20 @@ function isAdminPath(pathname) {
 }
 
 /**
- * If `settings.adminPathPrefix` is set (e.g. "x9k2"), the admin login page
- * is reachable only at `/<prefix>` or `/<prefix>/login`. The proxy rewrites
- * those to `/login` internally. `/login` accessed directly without prefix
- * AND without a valid cookie returns 404 — bot scanners see no admin surface.
+ * If `settings.adminPathPrefix` is set (e.g. "x9k2"), the operator must visit
+ * `/<prefix>` first. Middleware then issues a redirect to /login AND sets a
+ * short-lived gate cookie. Subsequent visits to /login require either:
+ *   - admin_gate cookie (just came from /<prefix>) — bot scanners don't have this
+ *   - auth_token cookie (already logged in)
+ * Without either, /login returns 404. Bots scanning /login on a public host
+ * never see the actual login form.
  *
- * Once a valid `auth_token` cookie is present, the admin SPA links to
- * `/dashboard/...` and `/login` directly without the prefix; that's allowed
- * because the cookie proves the operator already passed the gate.
+ * Cookie value = sha256(prefix) so server can verify in O(1) without storing
+ * state. Lifetime 10 minutes — enough for a human to type credentials.
  */
+const ADMIN_GATE_COOKIE = "admin_gate";
+const GATE_TTL_SEC = 600;
+
 function normalizePrefix(prefix) {
   const v = String(prefix || "").trim().replace(/^\/+|\/+$/g, "");
   if (!v) return "";
@@ -165,13 +171,14 @@ function normalizePrefix(prefix) {
   return v;
 }
 
-function loginPathFromPrefix(pathname, prefix) {
-  if (!prefix) return null;
-  const root = `/${prefix}`;
-  if (pathname === root || pathname === `${root}/`) return "/login";
-  if (pathname === `${root}/login`) return "/login";
-  if (pathname.startsWith(`${root}/login/`)) return pathname.slice(root.length);
-  return null;
+function gateCookieValue(prefix) {
+  return crypto.createHash("sha256").update(`9r-admin-gate:${prefix}`).digest("base64url");
+}
+
+function hasValidGateCookie(request, prefix) {
+  if (!prefix) return false;
+  const cookie = request.cookies.get(ADMIN_GATE_COOKIE)?.value;
+  return cookie && cookie === gateCookieValue(prefix);
 }
 
 export async function proxy(request) {
@@ -187,6 +194,12 @@ export async function proxy(request) {
   const settings = await loadSettings();
   const adminPrefix = normalizePrefix(settings?.adminPathPrefix);
 
+  // One-time per-request diagnostic. Helpful when the operator can't figure
+  // out why a path is/isn't matching. Kept short to avoid log spam.
+  if (pathname !== "/api/health" && (pathname.startsWith("/login") || pathname.startsWith("/x") || pathname.startsWith("/dashboard"))) {
+    console.log(`[guard] ${pathname} host=${request.headers.get("host")} prefix=${adminPrefix || "(empty)"} adminHosts=${settings?.adminHosts || "(empty)"}`);
+  }
+
   // Hostname gate: hide admin surface from public storefront hostname.
   // If adminHosts is configured and current host doesn't match, deny dashboard,
   // login and /api/admin/*. Returns 404 to avoid leaking that an admin lives here.
@@ -194,20 +207,29 @@ export async function proxy(request) {
     return new NextResponse("Not found", { status: 404 });
   }
 
-  // Admin path prefix gate. Only applies if both host check passed AND
-  // operator configured a prefix. Loopback bypasses prefix entirely so the
-  // operator can always recover from the local machine.
+  // Admin path prefix gate. Loopback bypasses entirely so the operator can
+  // always recover from the local machine. Logic:
+  //   - Visit /<prefix>    → set gate cookie, redirect to /login
+  //   - Visit /login       → 404 unless gate cookie OR auth_token present
+  // Result: bots scanning /login from outside hit 404 unless they know the
+  // prefix; humans typing /<prefix> get redirected and can sign in normally.
   if (adminPrefix && !isLoopbackHostname((request.headers.get("host") || "").split(":")[0])) {
-    const rewriteTo = loginPathFromPrefix(pathname, adminPrefix);
-    if (rewriteTo) {
-      const url = request.nextUrl.clone();
-      url.pathname = rewriteTo;
-      return NextResponse.rewrite(url);
+    const root = `/${adminPrefix}`;
+    if (pathname === root || pathname === `${root}/` || pathname === `${root}/login`) {
+      const res = NextResponse.redirect(new URL("/login", request.url));
+      res.cookies.set(ADMIN_GATE_COOKIE, gateCookieValue(adminPrefix), {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        maxAge: GATE_TTL_SEC,
+        secure: (request.headers.get("x-forwarded-proto") || "").toLowerCase() === "https",
+      });
+      return res;
     }
-    // Direct /login (without prefix) is 404 unless the user already has a
-    // valid cookie — that proves they passed the gate before.
     if (pathname === "/login" || pathname.startsWith("/login/")) {
-      if (!(await hasValidToken(request))) {
+      const okGate = hasValidGateCookie(request, adminPrefix);
+      const okAuth = await hasValidToken(request);
+      if (!okGate && !okAuth) {
         return new NextResponse("Not found", { status: 404 });
       }
     }
@@ -271,14 +293,22 @@ export async function proxy(request) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
-  // Redirect / based on hostname:
-  //   - admin host     → /dashboard  (operator default landing) — only if
-  //     they already authenticated. Otherwise: redirect to admin login (with
-  //     prefix obscure if configured; raw /login if not).
-  //   - storefront host → /store     (customer-facing default)
-  //   - public-only host without admin allowlisted → /store
+  // Redirect / based on hostname intent:
+  //   - adminHosts unconfigured (empty) → assume the deployment serves both
+  //     storefront and admin on one domain. Customers hitting `/` should land
+  //     on /store (admins know the prefix and type it directly).
+  //   - adminHosts set + current host NOT in list → storefront → /store.
+  //   - adminHosts set + current host IS in list → admin landing:
+  //       a) authenticated → /dashboard
+  //       b) prefix configured → redirect /<prefix> (which sets gate cookie)
+  //       c) otherwise → /login
   if (pathname === "/") {
-    if (settings && !isAdminHostAllowed(request, settings)) {
+    const adminHostsConfigured = settings?.adminHosts && String(settings.adminHosts).trim();
+    const onAdminHost = isAdminHostAllowed(request, settings) && (
+      adminHostsConfigured || isLoopbackHostname((request.headers.get("host") || "").split(":")[0])
+    );
+
+    if (!onAdminHost) {
       return NextResponse.redirect(new URL("/store", request.url));
     }
     if (await hasValidToken(request)) {
