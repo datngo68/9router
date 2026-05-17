@@ -61,6 +61,7 @@ export {
 export {
   createOrder, getOrderById, getOrders,
   cancelOrder, markOrderRefunded, confirmOrderAtomic,
+  attachApibankOrder, findOrderByApibankRef,
 } from "./repos/ordersRepo.js";
 
 // Combos

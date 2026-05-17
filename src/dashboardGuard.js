@@ -40,6 +40,8 @@ const PUBLIC_API_PATHS = [
   "/api/account/reset",
   // Telegram webhook — verifies its own secret in the handler.
   "/api/telegram/webhook",
+  // APIBank webhook — verifies HMAC signature in the handler.
+  "/api/webhooks/apibank",
 ];
 
 // Public top-level prefixes (LLM API endpoints with their own API key auth,

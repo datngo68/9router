@@ -43,6 +43,11 @@ function PendingPaymentBlock({ order }) {
             </div>
           )}
           <p className="text-[11px] text-text-muted">Mọi app banking VN: Vietcombank, Techcombank, MB, ...</p>
+          {qr?.landingUrl && (
+            <a href={qr.landingUrl} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">
+              Mở trang thanh toán đầy đủ ↗
+            </a>
+          )}
         </div>
 
         <div className="flex flex-col gap-2 text-sm">
@@ -56,11 +61,15 @@ function PendingPaymentBlock({ order }) {
             <Row label="Tên tài khoản" value={qr.accountName} />
           )}
           <Row label="Số tiền" value={fmtVnd(order.priceVnd)} />
-          <Row label="Nội dung CK" value={order.id} copyable highlight />
+          <Row label="Nội dung CK" value={qr?.addInfo || order.id} copyable highlight />
         </div>
       </div>
 
-      <p className="mt-4 text-xs text-text-muted">Giữ nguyên nội dung CK để admin đối chiếu nhanh. Trang tự cập nhật khi đơn được xác nhận.</p>
+      <p className="mt-4 text-xs text-text-muted">
+        {qr?.provider === "apibank"
+          ? "Hệ thống tự động xác nhận trong vòng 30s sau khi tiền vào — trang sẽ refresh, không cần làm gì thêm."
+          : "Giữ nguyên nội dung CK để admin đối chiếu nhanh. Trang tự cập nhật khi đơn được xác nhận."}
+      </p>
     </div>
   );
 }

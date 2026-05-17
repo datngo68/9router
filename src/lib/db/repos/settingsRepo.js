@@ -10,6 +10,8 @@ const ENCRYPTED_SETTING_KEYS = [
   "telegramWebhookSecret",
   "smtpPass",
   "customerGoogleClientSecret",
+  "apibankApiKey",
+  "apibankWebhookSecret",
 ];
 
 function encryptSensitive(data) {
@@ -73,6 +75,12 @@ const DEFAULT_SETTINGS = {
   customerGoogleClientId: "",
   customerGoogleClientSecret: "",
   customerGoogleRedirectUri: "",
+  // APIBank — automated payment via apibak.tudonghoa.me
+  apibankEnabled: false,
+  apibankBaseUrl: "",
+  apibankApiKey: "",
+  apibankBankAccountId: "",
+  apibankWebhookSecret: "",
 };
 
 async function readRaw() {
@@ -138,7 +146,7 @@ export async function getCloudUrl() {
 }
 
 // Fields that are sensitive secrets and must never appear in exports/backups.
-const SECRET_KEYS = ["password", "oidcClientSecret", "telegramBotToken", "telegramWebhookSecret", "smtpPass", "customerGoogleClientSecret"];
+const SECRET_KEYS = ["password", "oidcClientSecret", "telegramBotToken", "telegramWebhookSecret", "smtpPass", "customerGoogleClientSecret", "apibankApiKey", "apibankWebhookSecret"];
 
 export async function exportSettings({ includeSecrets = false } = {}) {
   const raw = await readRaw();

@@ -39,6 +39,9 @@ function rowToOrder(row) {
     deliveredAt: row.deliveredAt || null,
     cancelledAt: row.cancelledAt || null,
     refundedAt: row.refundedAt || null,
+    apibankOrderId: row.apibankOrderId || null,
+    apibankCode: row.apibankCode || null,
+    apibankExpiredAt: row.apibankExpiredAt || null,
   };
 }
 
@@ -63,6 +66,45 @@ export async function getOrderById(id) {
   if (!id) return null;
   const db = await getAdapter();
   return rowToOrder(db.get(`SELECT * FROM orders WHERE id = ?`, [id]));
+}
+
+/**
+ * Look up an order by the APIBank `customer_ref` (which is the 9router order
+ * id) or by the parallel APIBank order id we previously stored. Used by the
+ * webhook handler to resolve `payment.succeeded` events back to a 9router
+ * order without trusting only one identifier.
+ */
+export async function findOrderByApibankRef({ routerOrderId = null, apibankOrderId = null, apibankCode = null } = {}) {
+  const db = await getAdapter();
+  if (routerOrderId) {
+    const row = db.get(`SELECT * FROM orders WHERE id = ?`, [routerOrderId]);
+    if (row) return rowToOrder(row);
+  }
+  if (apibankOrderId) {
+    const row = db.get(`SELECT * FROM orders WHERE apibankOrderId = ?`, [apibankOrderId]);
+    if (row) return rowToOrder(row);
+  }
+  if (apibankCode) {
+    const row = db.get(`SELECT * FROM orders WHERE apibankCode = ?`, [apibankCode]);
+    if (row) return rowToOrder(row);
+  }
+  return null;
+}
+
+/**
+ * Persist the APIBank order returned from POST /v1/orders so we can render
+ * the right QR + reconcile webhooks later. Idempotent — overwrites previous
+ * values (admin may re-create an APIBank order if the first one expired).
+ */
+export async function attachApibankOrder(orderId, { apibankOrderId, apibankCode, apibankExpiredAt = null } = {}) {
+  if (!orderId) throw new Error("orderId is required");
+  if (!apibankOrderId || !apibankCode) throw new Error("apibankOrderId and apibankCode are required");
+  const db = await getAdapter();
+  db.run(
+    `UPDATE orders SET apibankOrderId = ?, apibankCode = ?, apibankExpiredAt = ? WHERE id = ?`,
+    [apibankOrderId, apibankCode, apibankExpiredAt, orderId]
+  );
+  return getOrderById(orderId);
 }
 
 export async function getOrders({ customerId = null, status = null, limit = 200 } = {}) {

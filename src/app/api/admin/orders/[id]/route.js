@@ -11,6 +11,7 @@ import { getConsistentMachineId } from "@/shared/utils/machineId";
 import { sendKeyDeliveredEmail } from "@/lib/notify/email";
 import { notifyCustomerKeyDelivered, notifyAdminOrderConfirmed, resolvePublicUrl } from "@/lib/notify/telegram";
 import { getClientIp } from "@/lib/auth/loginThrottle";
+import { cancelApibankOrder } from "@/lib/payments/apibank";
 
 export const dynamic = "force-dynamic";
 
@@ -73,6 +74,13 @@ export async function PATCH(request, { params }) {
     }
     if (action === "cancel") {
       const updated = await cancelOrder(id);
+      // Best-effort: also cancel the parallel APIBank order so the bank
+      // matcher stops watching for tx with this code. Failure here doesn't
+      // affect 9router state.
+      if (order.apibankOrderId) {
+        cancelApibankOrder(order.apibankOrderId)
+          .catch((e) => console.log(`[admin/orders] APIBank cancel failed for ${order.id}:`, e.message));
+      }
       return NextResponse.json({ order: updated });
     }
     if (action === "refund") {

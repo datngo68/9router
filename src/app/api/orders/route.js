@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { getCurrentCustomer } from "@/lib/auth/customerSession";
-import { createOrder, getOrders, getPricingPlanById, getCustomerById } from "@/lib/localDb";
+import { createOrder, getOrders, getPricingPlanById, getCustomerById, attachApibankOrder } from "@/lib/localDb";
 import { recordFailure, checkLogin, getClientIp } from "@/lib/auth/loginThrottle";
 import { notifyAdminOrderCreated } from "@/lib/notify/telegram";
 import { sendOrderCreatedEmail } from "@/lib/notify/email";
 import { getSettings } from "@/lib/localDb";
+import { createApibankOrder } from "@/lib/payments/apibank";
 
 export const dynamic = "force-dynamic";
 
@@ -45,6 +46,31 @@ export async function POST(request) {
   } catch (e) {
     recordFailure(`orderCreate:${ip}`);
     return NextResponse.json({ error: e.message || "Tạo đơn thất bại" }, { status: 400 });
+  }
+
+  // If APIBank automation is enabled, create a parallel APIBank order so the
+  // QR/landing comes back tied to a real bank tx. Best-effort: failure is
+  // logged but does NOT block the customer — admin can still confirm
+  // manually via Telegram (existing flow).
+  try {
+    const settings = await getSettings();
+    if (settings?.apibankEnabled && settings?.apibankBaseUrl && settings?.apibankApiKey && settings?.apibankBankAccountId) {
+      const ab = await createApibankOrder({
+        routerOrderId: order.id,
+        amountVnd: order.priceVnd,
+        description: `${plan.name} · ${order.id}`,
+        ttlSeconds: 900,
+      });
+      if (ab?.id && ab?.code) {
+        order = await attachApibankOrder(order.id, {
+          apibankOrderId: ab.id,
+          apibankCode: ab.code,
+          apibankExpiredAt: ab.expired_at || null,
+        });
+      }
+    }
+  } catch (e) {
+    console.log(`[orders] APIBank create failed for ${order.id}:`, e.message);
   }
 
   // Fire-and-forget notifications. Customer chỉ cần thấy order ID + chuyển

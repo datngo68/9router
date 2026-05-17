@@ -15,12 +15,15 @@ const SETTINGS_RESPONSE_HEADERS = {
 export async function GET() {
   try {
     const settings = await getSettings();
-    const { password, oidcClientSecret, telegramBotToken, telegramWebhookSecret, smtpPass, customerGoogleClientSecret, ...safeSettings } = settings;
+    const { password, oidcClientSecret, telegramBotToken, telegramWebhookSecret, smtpPass, customerGoogleClientSecret, apibankApiKey, apibankWebhookSecret, ...safeSettings } = settings;
     safeSettings.oidcConfigured = !!(safeSettings.oidcIssuerUrl && safeSettings.oidcClientId && oidcClientSecret);
     safeSettings.hasTelegramBotToken = !!telegramBotToken;
     safeSettings.hasTelegramWebhookSecret = !!telegramWebhookSecret;
     safeSettings.hasSmtpPass = !!smtpPass;
     safeSettings.customerGoogleConfigured = !!(safeSettings.customerGoogleClientId && customerGoogleClientSecret);
+    safeSettings.hasApibankApiKey = !!apibankApiKey;
+    safeSettings.hasApibankWebhookSecret = !!apibankWebhookSecret;
+    safeSettings.apibankConfigured = !!(safeSettings.apibankBaseUrl && apibankApiKey && safeSettings.apibankBankAccountId && apibankWebhookSecret);
     
     const enableRequestLogs = process.env.ENABLE_REQUEST_LOGS === "true";
     const enableTranslator = process.env.ENABLE_TRANSLATOR === "true";
@@ -87,9 +90,27 @@ export async function PATCH(request) {
 
     // Storefront sensitive setters: ignore empty values so admin doesn't
     // accidentally wipe them by re-saving a sanitized form.
-    for (const k of ["telegramBotToken", "smtpPass", "customerGoogleClientSecret"]) {
+    for (const k of ["telegramBotToken", "smtpPass", "customerGoogleClientSecret", "apibankApiKey", "apibankWebhookSecret"]) {
       if (Object.prototype.hasOwnProperty.call(body, k)) {
         if (!body[k] || !String(body[k]).trim()) delete body[k];
+      }
+    }
+
+    // Validate APIBank config when admin enables it.
+    if (body.apibankEnabled === true) {
+      const merged = { ...(await getSettings()), ...body };
+      if (!String(merged.apibankBaseUrl || "").trim()) {
+        return NextResponse.json({ error: "APIBank base URL bắt buộc khi bật." }, { status: 400 });
+      }
+      if (!String(merged.apibankApiKey || "").trim()) {
+        return NextResponse.json({ error: "APIBank API key bắt buộc khi bật." }, { status: 400 });
+      }
+      if (!String(merged.apibankBankAccountId || "").trim()) {
+        return NextResponse.json({ error: "APIBank bank_account_id bắt buộc khi bật." }, { status: 400 });
+      }
+      const sec = String(merged.apibankWebhookSecret || "").trim();
+      if (sec.length < 16) {
+        return NextResponse.json({ error: "APIBank webhook secret phải ≥ 16 ký tự. Bấm 'Sinh secret mới' để tạo nhanh." }, { status: 400 });
       }
     }
 
@@ -113,12 +134,15 @@ export async function PATCH(request) {
       resetComboRotation();
     }
 
-    const { password, oidcClientSecret, telegramBotToken, telegramWebhookSecret, smtpPass, customerGoogleClientSecret, ...safeSettings } = settings;
+    const { password, oidcClientSecret, telegramBotToken, telegramWebhookSecret, smtpPass, customerGoogleClientSecret, apibankApiKey, apibankWebhookSecret, ...safeSettings } = settings;
     safeSettings.oidcConfigured = !!(safeSettings.oidcIssuerUrl && safeSettings.oidcClientId && oidcClientSecret);
     safeSettings.hasTelegramBotToken = !!telegramBotToken;
     safeSettings.hasTelegramWebhookSecret = !!telegramWebhookSecret;
     safeSettings.hasSmtpPass = !!smtpPass;
     safeSettings.customerGoogleConfigured = !!(safeSettings.customerGoogleClientId && customerGoogleClientSecret);
+    safeSettings.hasApibankApiKey = !!apibankApiKey;
+    safeSettings.hasApibankWebhookSecret = !!apibankWebhookSecret;
+    safeSettings.apibankConfigured = !!(safeSettings.apibankBaseUrl && apibankApiKey && safeSettings.apibankBankAccountId && apibankWebhookSecret);
     return NextResponse.json(safeSettings, { headers: SETTINGS_RESPONSE_HEADERS });
   } catch (error) {
     console.log("Error updating settings:", error);
