@@ -2,19 +2,17 @@ import { NextResponse } from "next/server";
 import { getCurrentCustomer } from "@/lib/auth/customerSession";
 import { getOrderById, getSettings, attachApibankOrder, getPricingPlanById } from "@/lib/localDb";
 import { buildVietQrUrl, VN_BANKS } from "@/lib/payments/vietqr";
-import { buildPayLandingUrl, buildPayQrUrl, createApibankOrder } from "@/lib/payments/apibank";
+import { buildPayLandingUrl, createApibankOrder } from "@/lib/payments/apibank";
 
 export const dynamic = "force-dynamic";
 
-// GET /api/orders/[id]/qr — return the right QR + bank info for a pending
-// order. Customer-only (must own the order).
+// GET /api/orders/[id]/qr — return QR + bank info for a pending order.
+// Customer-only (must own the order).
 //
-// Two providers:
-//   - APIBank automated:  if order has apibankCode, return APIBank-hosted QR
-//                         (so the displayed QR points to the bank tx APIBank
-//                         is watching for, with amount + memo baked in).
-//   - VietQR fallback:    legacy manual flow — admin's saved bank account
-//                         + addInfo = order.id.
+// Luôn dùng VietQR để render QR (tự chủ, không phụ thuộc APIBank phải host
+// ảnh QR). Khi APIBank được bật, ta vẫn tạo APIBank order (để webhook tự
+// match khi tiền vào) nhưng QR hiển thị là VietQR với `addInfo = apibankCode`
+// — chính là mã APIBank đang theo dõi.
 export async function GET(request, { params }) {
   const session = await getCurrentCustomer(request);
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -32,8 +30,7 @@ export async function GET(request, { params }) {
 
   // Lazy-attach APIBank: nếu admin đã bật APIBank sau khi order được tạo
   // (hoặc create-time gọi APIBank fail), tạo APIBank order ngay bây giờ để
-  // đơn pending được hệ thống tự động match. Best-effort — fail thì rơi
-  // xuống VietQR fallback như cũ.
+  // đơn pending được hệ thống tự động match.
   if (
     !order.apibankCode &&
     settings?.apibankEnabled &&
@@ -61,44 +58,32 @@ export async function GET(request, { params }) {
     }
   }
 
-  // ── APIBank-managed QR ──────────────────────────────────────────────────
-  if (order.apibankCode && settings?.apibankBaseUrl) {
-    const bank = VN_BANKS.find((b) => b.code === settings.bankCode || b.bin === settings.bankCode);
-    return NextResponse.json({
-      provider: "apibank",
-      url: buildPayQrUrl(settings.apibankBaseUrl, order.apibankCode),
-      landingUrl: buildPayLandingUrl(settings.apibankBaseUrl, order.apibankCode),
-      bankCode: settings.bankCode,
-      bankName: bank?.name,
-      accountNo: settings.bankAccountNo,
-      accountName: settings.bankAccountName,
-      amount: order.priceVnd,
-      addInfo: order.apibankCode,
-      apibankCode: order.apibankCode,
-      apibankExpiredAt: order.apibankExpiredAt,
-    });
-  }
+  // Nội dung CK: nếu có apibankCode, dùng nó (APIBank đang theo dõi để match
+  // tự động). Không có → fallback `order.id` cho luồng VietQR thủ công.
+  const addInfo = order.apibankCode || order.id;
 
-  // ── VietQR fallback ─────────────────────────────────────────────────────
-  // Khi APIBank không khả dụng, tự build QR VietQR. addInfo phải là cái mà
-  // admin có thể đối chiếu thủ công — dùng order.id là hợp lý vì lúc này
-  // không có code APIBank để theo dõi tự động.
   const bank = VN_BANKS.find((b) => b.code === settings.bankCode || b.bin === settings.bankCode);
   const url = buildVietQrUrl({
     bank: settings.bankCode,
     accountNo: settings.bankAccountNo,
     accountName: settings.bankAccountName,
     amount: order.priceVnd,
-    addInfo: order.id,
+    addInfo,
   });
+
   return NextResponse.json({
-    provider: "vietqr",
+    provider: order.apibankCode ? "apibank-vietqr" : "vietqr",
     url,
+    landingUrl: order.apibankCode && settings?.apibankBaseUrl
+      ? buildPayLandingUrl(settings.apibankBaseUrl, order.apibankCode)
+      : null,
     bankCode: settings.bankCode,
     bankName: bank?.name,
     accountNo: settings.bankAccountNo,
     accountName: settings.bankAccountName,
     amount: order.priceVnd,
-    addInfo: order.id,
+    addInfo,
+    apibankCode: order.apibankCode || null,
+    apibankExpiredAt: order.apibankExpiredAt || null,
   });
 }
