@@ -41,6 +41,7 @@ export {
 export {
   getCustomers, getCustomerById, findCustomerByEmail,
   createCustomer, verifyCustomerPassword, setCustomerPassword,
+  findCustomerByGoogleSub, upsertGoogleCustomer, setCustomerTotp,
   updateCustomer, markEmailVerified, deleteCustomer,
 } from "./repos/customersRepo.js";
 

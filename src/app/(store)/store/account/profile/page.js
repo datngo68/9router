@@ -13,6 +13,7 @@ export default function ProfilePage() {
   const [link, setLink] = useState(null);
   const [linkErr, setLinkErr] = useState("");
   const [linkBusy, setLinkBusy] = useState(false);
+  const [twoFa, setTwoFa] = useState({ secret: "", otpauthUrl: "", code: "", msg: "" });
 
   async function loadMe() {
     const d = await fetch("/api/account/me", { cache: "no-store" }).then((r) => r.json());
@@ -81,6 +82,40 @@ export default function ProfilePage() {
     } finally { setBusy(false); }
   }
 
+  async function setup2fa() {
+    setTwoFa((v) => ({ ...v, msg: "" }));
+    const res = await fetch("/api/account/2fa/setup", { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) { setTwoFa((v) => ({ ...v, msg: data?.error || "Không tạo được 2FA" })); return; }
+    setTwoFa({ secret: data.secret, otpauthUrl: data.otpauthUrl, code: "", msg: "Quét mã bằng Google Authenticator/Authy rồi nhập mã 6 số." });
+  }
+
+  async function verify2fa() {
+    const res = await fetch("/api/account/2fa/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: twoFa.code }),
+    });
+    const data = await res.json();
+    if (!res.ok) { setTwoFa((v) => ({ ...v, msg: data?.error || "Mã không hợp lệ" })); return; }
+    setMe(data.customer);
+    setTwoFa({ secret: "", otpauthUrl: "", code: "", msg: "Đã bật xác thực hai lớp." });
+  }
+
+  async function disable2fa() {
+    const code = prompt("Nhập mã 2FA hiện tại để tắt");
+    if (code === null) return;
+    const res = await fetch("/api/account/2fa/disable", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    const data = await res.json();
+    if (!res.ok) { setTwoFa((v) => ({ ...v, msg: data?.error || "Không tắt được 2FA" })); return; }
+    setMe(data.customer);
+    setTwoFa({ secret: "", otpauthUrl: "", code: "", msg: "Đã tắt xác thực hai lớp." });
+  }
+
   async function changePassword() {
     setPwdMsg("");
     if (pwd.next.length < 8) { setPwdMsg("Mật khẩu mới cần tối thiểu 8 ký tự"); return; }
@@ -123,6 +158,31 @@ export default function ProfilePage() {
             )}
           </div>
         </div>
+      </section>
+
+      <section className="rounded-xl border border-border-subtle bg-surface p-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="font-semibold">Xác thực hai lớp</h2>
+            <p className="text-sm text-text-muted">{me.totpEnabled ? "Đã bật 2FA bằng ứng dụng xác thực." : "Bảo vệ đăng nhập bằng mã 6 số từ Google Authenticator/Authy."}</p>
+          </div>
+          {me.totpEnabled ? (
+            <button onClick={disable2fa} className="rounded-lg border border-border px-3 py-1.5 text-xs text-text-muted hover:text-red-500">Tắt 2FA</button>
+          ) : (
+            <button onClick={setup2fa} className="rounded-lg border border-primary/40 bg-primary/10 px-3 py-1.5 text-xs text-primary hover:bg-primary/20">Bật 2FA</button>
+          )}
+        </div>
+        {twoFa.otpauthUrl && (
+          <div className="mt-4 rounded-lg border border-border-subtle bg-surface-2 p-4">
+            <img alt="2FA QR" src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(twoFa.otpauthUrl)}`} className="rounded-lg border border-border" />
+            <p className="mt-3 break-all text-xs text-text-muted">Secret: {twoFa.secret}</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <input value={twoFa.code} onChange={(e) => setTwoFa({ ...twoFa, code: e.target.value })} placeholder="Mã 6 số" className="rounded-lg border border-border bg-bg px-3 py-2" />
+              <button onClick={verify2fa} className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary/90">Xác nhận bật</button>
+            </div>
+          </div>
+        )}
+        {twoFa.msg && <p className="mt-3 text-sm text-text-muted">{twoFa.msg}</p>}
       </section>
 
       <section className="rounded-xl border border-border-subtle bg-surface p-6">

@@ -10,8 +10,10 @@ function LoginForm() {
   const next = params.get("next") || "/store/account";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [totpCode, setTotpCode] = useState("");
+  const [requires2fa, setRequires2fa] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(params.get("error") || "");
 
   async function submit(e) {
     e.preventDefault();
@@ -21,10 +23,11 @@ function LoginForm() {
       const res = await fetch("/api/account/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, totpCode }),
       });
       const data = await res.json();
       if (!res.ok) {
+        if (data?.requires2fa) setRequires2fa(true);
         setError(data?.error || "Đăng nhập thất bại");
         return;
       }
@@ -64,6 +67,22 @@ function LoginForm() {
             className="rounded-lg border border-border bg-bg px-3 py-2 focus:outline-none focus:border-primary"
           />
         </label>
+        {requires2fa && (
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="text-text-muted">Mã xác thực 2FA</span>
+            <input
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              value={totpCode}
+              onChange={(e) => setTotpCode(e.target.value)}
+              className="rounded-lg border border-border bg-bg px-3 py-2 focus:outline-none focus:border-primary"
+            />
+          </label>
+        )}
+        <a href={`/api/account/google/start?next=${encodeURIComponent(next)}`} className="rounded-lg border border-border px-4 py-2.5 text-center text-sm font-medium hover:border-primary hover:text-primary">
+          Đăng nhập bằng Google
+        </a>
         {error && <p className="rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-500">{error}</p>}
         <button
           type="submit"

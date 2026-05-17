@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { createCustomer } from "@/lib/localDb";
+import { validateRegistrationPayload } from "@/lib/auth/customerRegistration";
 import { setCustomerSessionCookie } from "@/lib/auth/customerSession";
 import { recordFailure, checkLogin, getClientIp } from "@/lib/auth/loginThrottle";
+import { sendWelcomeEmail } from "@/lib/notify/email";
 
 export const dynamic = "force-dynamic";
 
@@ -27,17 +29,14 @@ export async function POST(request) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { email, password, displayName, phone, telegramChatId } = body || {};
-  if (!email || !password) {
-    return NextResponse.json({ error: "email and password are required" }, { status: 400 });
-  }
-  if (String(password).length < 8) {
-    return NextResponse.json({ error: "password must be at least 8 characters" }, { status: 400 });
+  const parsed = validateRegistrationPayload(body);
+  if (!parsed.ok) {
+    return NextResponse.json({ error: parsed.error }, { status: parsed.status });
   }
 
   let customer;
   try {
-    customer = await createCustomer({ email, password, displayName, phone, telegramChatId });
+    customer = await createCustomer(parsed.value);
   } catch (e) {
     // Treat duplicate email as a generic conflict to avoid enumeration. Still
     // count it toward the throttle so a script cannot probe many emails.
@@ -47,6 +46,8 @@ export async function POST(request) {
     }
     return NextResponse.json({ error: e.message || "Registration failed" }, { status: 400 });
   }
+
+  await sendWelcomeEmail({ email: customer.email, displayName: customer.displayName });
 
   const cookieStore = await cookies();
   await setCustomerSessionCookie(cookieStore, request, customer.id);

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { verifyCustomerPassword } from "@/lib/localDb";
+import { getCustomerById, verifyCustomerPassword } from "@/lib/localDb";
+import { verifyTotpCode } from "@/lib/auth/customerTotp";
 import { setCustomerSessionCookie } from "@/lib/auth/customerSession";
 import { recordFailure, clearFailures, checkLogin, getClientIp } from "@/lib/auth/loginThrottle";
 
@@ -26,7 +27,7 @@ export async function POST(request) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { email, password } = body || {};
+  const { email, password, totpCode } = body || {};
   if (!email || !password) {
     recordFailure(`customerLogin:${ip}`);
     return NextResponse.json({ error: "email and password are required" }, { status: 400 });
@@ -36,6 +37,15 @@ export async function POST(request) {
   if (!customer) {
     recordFailure(`customerLogin:${ip}`);
     return NextResponse.json({ error: "Invalid email or password" }, { status: 401 });
+  }
+
+  const fullCustomer = await getCustomerById(customer.id, { withPassword: true });
+  if (fullCustomer?.totpEnabled) {
+    if (!totpCode) return NextResponse.json({ error: "2FA code required", requires2fa: true }, { status: 401 });
+    if (!verifyTotpCode(fullCustomer.totpSecret, totpCode)) {
+      recordFailure(`customerLogin:${ip}`);
+      return NextResponse.json({ error: "Invalid 2FA code", requires2fa: true }, { status: 401 });
+    }
   }
 
   const cookieStore = await cookies();

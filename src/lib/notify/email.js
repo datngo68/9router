@@ -59,6 +59,15 @@ async function sendMail({ to, subject, text, html }) {
   }
 }
 
+export async function sendWelcomeEmail({ email, displayName, portalUrl }) {
+  const cfg = await readSmtpSettings();
+  const url = portalUrl || (cfg?.storeUrl ? `${cfg.storeUrl.replace(/\/$/, "")}/store/account` : "/store/account");
+  const subject = `${cfg?.storeName || "9Router"} — Chào mừng bạn`;
+  const text = `Xin chào ${displayName || email},\n\nTài khoản của bạn đã được tạo thành công. Bạn có thể quản lý key, đơn hàng và usage tại:\n${url}\n\nCảm ơn bạn đã sử dụng ${cfg?.storeName || "9Router"}.`;
+  const html = `<p>Xin chào ${displayName || email},</p><p>Tài khoản của bạn đã được tạo thành công.</p><p>Quản lý key, đơn hàng và usage tại: <a href="${url}">${url}</a></p><p>Cảm ơn bạn đã sử dụng ${cfg?.storeName || "9Router"}.</p>`;
+  return sendMail({ to: email, subject, text, html });
+}
+
 export async function sendPasswordResetEmail({ email, displayName, token }) {
   const cfg = await readSmtpSettings();
   const url = cfg?.storeUrl ? `${cfg.storeUrl.replace(/\/$/, "")}/store/reset/${encodeURIComponent(token)}` : `/store/reset/${encodeURIComponent(token)}`;

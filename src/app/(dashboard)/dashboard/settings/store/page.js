@@ -23,6 +23,12 @@ const SMTP_FIELDS = [
   { key: "smtpFrom", label: "From", placeholder: "noreply@example.com" },
 ];
 
+const GOOGLE_FIELDS = [
+  { key: "customerGoogleClientId", label: "Google Client ID", placeholder: "xxxxx.apps.googleusercontent.com" },
+  { key: "customerGoogleClientSecret", label: "Google Client Secret", type: "password" },
+  { key: "customerGoogleRedirectUri", label: "Redirect URI", placeholder: "https://domain.com/api/account/google/callback" },
+];
+
 const BANK_FIELDS = [
   { key: "bankAccountNo", label: "Số tài khoản", placeholder: "0123456789" },
   { key: "bankAccountName", label: "Tên chủ tài khoản (không dấu)", placeholder: "NGUYEN VAN A", hint: "Bắt buộc viết hoa, không dấu — VietQR yêu cầu vậy." },
@@ -274,6 +280,26 @@ export default function StoreSettingsPage() {
               <p className="mt-3 text-xs text-text-muted">PIN sống 5 phút, 3 lần thử. Trang tự đóng khi liên kết thành công.</p>
             </div>
           )}
+        </div>
+      </Card>
+
+      <Card>
+        <h2 className="mb-1 font-semibold">Google đăng nhập khách hàng</h2>
+        <p className="mb-3 text-xs text-text-muted">Tạo OAuth Client trên Google Cloud, thêm redirect URI trùng cấu hình bên dưới.</p>
+        <label className="mb-3 flex items-center gap-2 text-sm">
+          <Toggle checked={!!settings.customerGoogleOAuthEnabled} onChange={(v) => setSettings({ ...settings, customerGoogleOAuthEnabled: v })} size="sm" />
+          <span>Bật đăng nhập bằng Google</span>
+        </label>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {GOOGLE_FIELDS.map((f) => field({ ...f, hint: f.key === "customerGoogleClientSecret" && settings.customerGoogleConfigured ? "Đã lưu (để trống nếu giữ nguyên)" : f.hint }))}
+        </div>
+        <div className="mt-4">
+          <Button onClick={() => save({
+            customerGoogleOAuthEnabled: !!settings.customerGoogleOAuthEnabled,
+            customerGoogleClientId: settings.customerGoogleClientId || "",
+            customerGoogleClientSecret: settings.customerGoogleClientSecret || "",
+            customerGoogleRedirectUri: settings.customerGoogleRedirectUri || "",
+          })} disabled={busy}>Lưu Google OAuth</Button>
         </div>
       </Card>
 

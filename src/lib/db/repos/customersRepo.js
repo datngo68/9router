@@ -21,6 +21,11 @@ function rowToCustomer(row) {
     phone: row.phone || null,
     emailVerified: row.emailVerified === 1,
     notes: row.notes || null,
+    googleSub: row.googleSub || null,
+    authProvider: row.authProvider || "password",
+    totpSecret: row.totpSecret || null,
+    totpEnabled: row.totpEnabled === 1,
+    totpVerifiedAt: row.totpVerifiedAt || null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -28,7 +33,7 @@ function rowToCustomer(row) {
 
 function publicView(customer) {
   if (!customer) return null;
-  const { passwordHash: _ph, ...rest } = customer;
+  const { passwordHash: _ph, totpSecret: _ts, ...rest } = customer;
   return rest;
 }
 
@@ -58,22 +63,23 @@ export async function findCustomerByEmail(email, { withPassword = false } = {}) 
   return withPassword ? c : publicView(c);
 }
 
-export async function createCustomer({ email, password, displayName, phone, telegramChatId }) {
+export async function createCustomer({ email, password, displayName, phone, telegramChatId, googleSub, authProvider = "password", emailVerified = false }) {
   const e = normalizeEmail(email);
   if (!e) throw new Error("email is required");
-  if (!password || String(password).length < 8) throw new Error("password must be at least 8 characters");
+  if (password !== null && password !== undefined && String(password).length < 8) throw new Error("password must be at least 8 characters");
+  if ((password === null || password === undefined) && authProvider !== "google") throw new Error("password is required");
 
   const db = await getAdapter();
   const existing = db.get(`SELECT id FROM customers WHERE email = ?`, [e]);
   if (existing) throw new Error("email already registered");
 
   const id = uuidv4();
-  const passwordHash = await bcrypt.hash(String(password), BCRYPT_COST);
+  const passwordHash = password === null || password === undefined ? null : await bcrypt.hash(String(password), BCRYPT_COST);
   const now = new Date().toISOString();
   db.run(
-    `INSERT INTO customers(id, email, passwordHash, displayName, phone, telegramChatId, emailVerified, createdAt, updatedAt)
-     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, e, passwordHash, displayName || null, phone || null, telegramChatId || null, 0, now, now]
+    `INSERT INTO customers(id, email, passwordHash, displayName, phone, telegramChatId, emailVerified, googleSub, authProvider, createdAt, updatedAt)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, e, passwordHash, displayName || null, phone || null, telegramChatId || null, emailVerified ? 1 : 0, googleSub || null, authProvider || "password", now, now]
   );
   return publicView(await getCustomerById(id, { withPassword: true }));
 }
@@ -88,8 +94,36 @@ export async function verifyCustomerPassword(email, password) {
   const dummyHash = "$2b$10$0123456789012345678901uQz0z0z0z0z0z0z0z0z0z0z0z0z0z0z";
   const ok = await bcrypt.compare(String(password || ""), customer?.passwordHash || dummyHash);
   if (!customer) return null;
+  if (!customer.passwordHash) return null;
   if (!ok) return null;
   return publicView(customer);
+}
+
+export async function findCustomerByGoogleSub(googleSub, { withPassword = false } = {}) {
+  if (!googleSub) return null;
+  const db = await getAdapter();
+  const row = db.get(`SELECT * FROM customers WHERE googleSub = ?`, [String(googleSub)]);
+  const c = rowToCustomer(row);
+  return withPassword ? c : publicView(c);
+}
+
+export async function upsertGoogleCustomer({ email, googleSub, displayName }) {
+  const e = normalizeEmail(email);
+  if (!e) throw new Error("email is required");
+  if (!googleSub) throw new Error("googleSub is required");
+  const bySub = await findCustomerByGoogleSub(googleSub);
+  if (bySub) return { customer: bySub, created: false };
+  const existing = await findCustomerByEmail(e);
+  if (existing) {
+    const updated = await updateCustomer(existing.id, { googleSub, authProvider: existing.authProvider === "password" ? "password+google" : "google", emailVerified: true });
+    return { customer: updated, created: false };
+  }
+  const customer = await createCustomer({ email: e, password: null, displayName, googleSub, authProvider: "google", emailVerified: true });
+  return { customer, created: true };
+}
+
+export async function setCustomerTotp(id, { secret, enabled, verifiedAt }) {
+  return updateCustomer(id, { totpSecret: secret ?? null, totpEnabled: !!enabled, totpVerifiedAt: verifiedAt ?? null });
 }
 
 export async function setCustomerPassword(id, newPassword) {
@@ -105,7 +139,7 @@ export async function updateCustomer(id, patch = {}) {
   const db = await getAdapter();
   const existing = await getCustomerById(id, { withPassword: true });
   if (!existing) return null;
-  const fields = ["displayName", "phone", "telegramChatId", "notes"];
+  const fields = ["displayName", "phone", "telegramChatId", "notes", "googleSub", "authProvider", "totpSecret", "totpVerifiedAt"];
   const sets = [];
   const params = [];
   for (const f of fields) {
@@ -117,6 +151,10 @@ export async function updateCustomer(id, patch = {}) {
   if (Object.prototype.hasOwnProperty.call(patch, "emailVerified")) {
     sets.push(`emailVerified = ?`);
     params.push(patch.emailVerified ? 1 : 0);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "totpEnabled")) {
+    sets.push(`totpEnabled = ?`);
+    params.push(patch.totpEnabled ? 1 : 0);
   }
   if (sets.length === 0) return publicView(existing);
   sets.push(`updatedAt = ?`);

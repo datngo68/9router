@@ -9,6 +9,7 @@ const ENCRYPTED_SETTING_KEYS = [
   "telegramBotToken",
   "telegramWebhookSecret",
   "smtpPass",
+  "customerGoogleClientSecret",
 ];
 
 function encryptSensitive(data) {
@@ -68,6 +69,10 @@ const DEFAULT_SETTINGS = {
   rtkEnabled: true,
   cavemanEnabled: false,
   cavemanLevel: "full",
+  customerGoogleOAuthEnabled: false,
+  customerGoogleClientId: "",
+  customerGoogleClientSecret: "",
+  customerGoogleRedirectUri: "",
 };
 
 async function readRaw() {
@@ -133,7 +138,7 @@ export async function getCloudUrl() {
 }
 
 // Fields that are sensitive secrets and must never appear in exports/backups.
-const SECRET_KEYS = ["password", "oidcClientSecret", "telegramBotToken", "telegramWebhookSecret", "smtpPass"];
+const SECRET_KEYS = ["password", "oidcClientSecret", "telegramBotToken", "telegramWebhookSecret", "smtpPass", "customerGoogleClientSecret"];
 
 export async function exportSettings({ includeSecrets = false } = {}) {
   const raw = await readRaw();

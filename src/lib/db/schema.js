@@ -1,5 +1,5 @@
 // Latest schema version — bumped when a migration is added in ./migrations/
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 export const PRAGMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -125,12 +125,18 @@ export const TABLES = {
       phone: "TEXT",
       emailVerified: "INTEGER DEFAULT 0",
       notes: "TEXT",
+      googleSub: "TEXT",
+      authProvider: "TEXT DEFAULT 'password'",
+      totpSecret: "TEXT",
+      totpEnabled: "INTEGER DEFAULT 0",
+      totpVerifiedAt: "TEXT",
       createdAt: "TEXT NOT NULL",
       updatedAt: "TEXT NOT NULL",
     },
     indexes: [
       "CREATE INDEX IF NOT EXISTS idx_cust_email ON customers(email)",
       "CREATE INDEX IF NOT EXISTS idx_cust_tg ON customers(telegramChatId)",
+      "CREATE INDEX IF NOT EXISTS idx_cust_google ON customers(googleSub)",
     ],
   },
   customerSessions: {

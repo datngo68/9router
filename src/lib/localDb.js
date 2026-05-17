@@ -20,6 +20,7 @@ export {
   // Storefront — customers + sessions + plans + orders
   getCustomers, getCustomerById, findCustomerByEmail,
   createCustomer, verifyCustomerPassword, setCustomerPassword,
+  findCustomerByGoogleSub, upsertGoogleCustomer, setCustomerTotp,
   updateCustomer, markEmailVerified, deleteCustomer,
   hashToken, createCustomerSession, findCustomerSessionByToken,
   revokeCustomerSession, revokeAllSessionsForCustomer, pruneExpiredSessions,
