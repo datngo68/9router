@@ -5,8 +5,8 @@
 //   - createApibankOrder({ amount, customerRef, ... }) → POST /v1/orders
 //   - cancelApibankOrder(orderId)                      → POST /v1/orders/{id}:cancel
 //   - getApibankOrder(orderId)                          → GET  /v1/orders/{id}
-//   - pingApibank(baseUrl, apiKey)                      → list 1 order, used by
-//                                                          dashboard "Test"
+//   - pingApibank(baseUrl, apiKey)                      → list bank accounts,
+//                                                          used by dashboard "Test"
 //   - verifyWebhookSignature(rawBody, header, secret)   → HMAC SHA-256 verify
 //   - generateWebhookSecret()                           → 32-byte hex
 //   - buildPayLandingUrl(baseUrl, code)                 → {base}/pay/{code}
@@ -138,14 +138,19 @@ export async function getApibankOrder(apibankOrderId) {
 
 /**
  * Lightweight credentials check used by the dashboard "Test connection" button.
- * Calls a low-cost read endpoint (`GET /v1/orders?limit=1`); 200/204 → ok.
+ * Calls a low-cost read endpoint (`GET /v1/bank-accounts`); 200 → ok.
+ *
+ * Note: APIBank không có route list `GET /v1/orders` (chỉ có POST create
+ * và GET by id). `/v1/bank-accounts` là endpoint Bearer-auth gần nhất để
+ * verify API key + scope `bank_accounts:read`.
  */
 export async function pingApibank({ baseUrl, apiKey }) {
-  const data = await apibankFetch("GET", "/v1/orders?limit=1", {
+  const data = await apibankFetch("GET", "/v1/bank-accounts", {
     baseUrl,
     apiKey,
   });
-  return { ok: true, sample: Array.isArray(data) ? data.slice(0, 1) : data };
+  const sample = Array.isArray(data) ? data.slice(0, 1) : data;
+  return { ok: true, bankAccountsCount: Array.isArray(data) ? data.length : null, sample };
 }
 
 /**
