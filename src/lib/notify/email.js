@@ -92,10 +92,14 @@ export async function sendKeyDeliveredEmail({ email, displayName, planName, key,
 export async function sendOrderCreatedEmail({ email, displayName, order, planName, paymentInfo }) {
   const cfg = await readSmtpSettings();
   const subject = `${cfg?.storeName || "9Router"} — Đơn ${order.id} đã tạo`;
-  const text = `Xin chào ${displayName || email},\n\nĐơn ${order.id} (${planName}) đã được tạo, đang chờ thanh toán.\n\nNội dung chuyển khoản: ${order.id}\nSố tiền: ${order.priceVnd.toLocaleString("vi-VN")}đ\n\n${paymentInfo || ""}\n\nSau khi chúng tôi xác nhận thanh toán, key sẽ được gửi qua email.`;
+  // Nội dung chuyển khoản: ưu tiên apibankCode (mã trên QR APIBank tự sinh —
+  // dùng để match giao dịch ngân hàng). Fallback `order.id` chỉ áp dụng cho
+  // luồng VietQR thủ công khi APIBank chưa bật.
+  const transferContent = order.apibankCode || order.id;
+  const text = `Xin chào ${displayName || email},\n\nĐơn ${order.id} (${planName}) đã được tạo, đang chờ thanh toán.\n\nNội dung chuyển khoản: ${transferContent}\nSố tiền: ${order.priceVnd.toLocaleString("vi-VN")}đ\n\n${paymentInfo || ""}\n\nSau khi chúng tôi xác nhận thanh toán, key sẽ được gửi qua email.`;
   const html = `<p>Xin chào ${displayName || email},</p>
     <p>Đơn <strong>${order.id}</strong> (${planName}) đã được tạo.</p>
-    <p>Nội dung chuyển khoản: <code>${order.id}</code><br/>Số tiền: <strong>${order.priceVnd.toLocaleString("vi-VN")}đ</strong></p>
+    <p>Nội dung chuyển khoản: <code>${transferContent}</code><br/>Số tiền: <strong>${order.priceVnd.toLocaleString("vi-VN")}đ</strong></p>
     <pre>${paymentInfo || ""}</pre>
     <p>Sau khi xác nhận thanh toán, key sẽ được gửi qua email.</p>`;
   return sendMail({ to: email, subject, text, html });

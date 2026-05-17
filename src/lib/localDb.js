@@ -28,5 +28,6 @@ export {
   updatePricingPlan, deletePricingPlan, planToApiKeyPolicy,
   createOrder, getOrderById, getOrders,
   cancelOrder, markOrderRefunded, confirmOrderAtomic,
+  attachApibankOrder, findOrderByApibankRef,
   exportDb, importDb,
 } from "@/lib/db/index.js";
