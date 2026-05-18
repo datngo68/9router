@@ -8,6 +8,7 @@ const NAV = [
   { href: "/store", label: "Trang chủ" },
   { href: "/store/pricing", label: "Bảng giá" },
   { href: "/store/models", label: "Models" },
+  { href: "/store/chat", label: "Chat" },
   { href: "/store/docs", label: "API Docs" },
 ];
 

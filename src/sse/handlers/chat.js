@@ -63,8 +63,13 @@ function maskHeaders(headers) {
  * Handle chat completion request
  * Supports: OpenAI, Claude, Gemini, OpenAI Responses API formats
  * Format detection and translation handled by translator
+ *
+ * options.preloadedApiKeyRecord: when supplied (e.g. from internal store-chat
+ * proxy where the raw key never leaves the DB), skip the extract/validate
+ * step and run all policy/quota checks against the provided record.
  */
-export async function handleChat(request, clientRawRequest = null) {
+export async function handleChat(request, clientRawRequest = null, options = {}) {
+  const { preloadedApiKeyRecord = null } = options;
   let body;
   try {
     body = await request.json();
@@ -116,7 +121,12 @@ export async function handleChat(request, clientRawRequest = null) {
   // machine ID. Skip requireApiKey for those — quota/policy checks below
   // are also skipped naturally because apiKeyRecord stays null.
   const cliBypass = isLoopbackRequest(request) && (await hasValidCliToken(request));
-  if (settings.requireApiKey && !cliBypass) {
+  // Internal preload: store-chat proxy already resolved the customer's key
+  // from session+DB. The raw key isn't persisted, so we accept the preloaded
+  // record and let the policy/quota block below run on it.
+  if (preloadedApiKeyRecord) {
+    apiKeyRecord = preloadedApiKeyRecord;
+  } else if (settings.requireApiKey && !cliBypass) {
     if (!apiKey) {
       log.warn("AUTH", "Missing API key (requireApiKey=true)");
       return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");
@@ -127,6 +137,9 @@ export async function handleChat(request, clientRawRequest = null) {
       return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key");
     }
     apiKeyRecord = await loadApiKeyPolicy(apiKey);
+  }
+
+  if (apiKeyRecord) {
     const expiryCheck = checkApiKeyExpiry(apiKeyRecord);
     if (!expiryCheck.allowed) {
       log.warn("AUTH", expiryCheck.message);
