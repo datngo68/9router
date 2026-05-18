@@ -94,6 +94,35 @@ function isLocalRequest(request) {
   return true;
 }
 
+function isPublicLlmApi(pathname) {
+  return PUBLIC_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+}
+
+function extractApiKey(request) {
+  const authHeader = request.headers.get("Authorization");
+  if (authHeader?.startsWith("Bearer ")) return authHeader.slice(7);
+  return request.headers.get("x-api-key");
+}
+
+async function hasValidApiKey(request) {
+  const apiKey = extractApiKey(request);
+  if (!apiKey) return false;
+  return await validateApiKey(apiKey);
+}
+
+async function canAccessPublicLlmApi(request) {
+  if (isLocalRequest(request)) return true;
+  if (await hasValidCliToken(request)) return true;
+  return await hasValidApiKey(request);
+}
+
+async function canAccessLocalOnlyRoute(request) {
+  if (await hasValidCliToken(request)) return true;
+  // Browser on host: loopback Host + Origin (blocks tunnel/CSRF) + JWT cookie (blocks unauth raw clients)
+  if (isLocalRequest(request) && await hasValidToken(request)) return true;
+  return false;
+}
+
 async function hasValidToken(request) {
   const token = request.cookies.get("auth_token")?.value;
   return await verifyDashboardAuthToken(token);
@@ -115,7 +144,7 @@ async function isAuthenticated(request) {
 }
 
 function isPublicApi(pathname) {
-  if (PUBLIC_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`))) return true;
+  if (isPublicLlmApi(pathname)) return true;
   return PUBLIC_API_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 }
 
@@ -196,8 +225,8 @@ export async function proxy(request) {
 
   // Local-only gate for spawn-capable / host-secret routes.
   if (LOCAL_ONLY_PATHS.some((p) => pathname.startsWith(p))) {
-    if (!isLocalRequest(request)) {
-      return NextResponse.json({ error: "Local only: loopback access required" }, { status: 403 });
+    if (!(await canAccessLocalOnlyRoute(request))) {
+      return NextResponse.json({ error: "Local only: CLI token required" }, { status: 403 });
     }
   }
 
@@ -250,6 +279,11 @@ export async function proxy(request) {
     if (await hasValidCliToken(request) || await hasValidToken(request))
       return NextResponse.next();
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  if (isPublicLlmApi(pathname)) {
+    if (await canAccessPublicLlmApi(request)) return NextResponse.next();
+    return NextResponse.json({ error: "API key required for remote API access" }, { status: 401 });
   }
 
   // Deny-by-default for /api/* — public allow-list bypasses, everything else requires auth.
