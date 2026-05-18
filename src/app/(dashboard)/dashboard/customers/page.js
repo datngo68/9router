@@ -18,9 +18,18 @@ export default function AdminCustomersPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Khách hàng</h1>
-        <p className="text-sm text-text-muted">Tổng {customers?.length ?? "..."} khách. Click để xem chi tiết.</p>
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold">Khách hàng</h1>
+          <p className="text-sm text-text-muted">Tổng {customers?.length ?? "..."} khách. Click để xem chi tiết.</p>
+        </div>
+        <Link
+          href="/dashboard/customers/analytics"
+          className="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm hover:border-primary hover:text-primary"
+        >
+          <span className="material-symbols-outlined text-base">analytics</span>
+          Analytics
+        </Link>
       </div>
 
       <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Tìm email, tên hoặc số điện thoại..." />

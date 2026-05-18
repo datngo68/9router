@@ -30,6 +30,7 @@ const navItems = [
 const salesItems = [
   { href: "/dashboard/orders", label: "Orders", icon: "receipt_long" },
   { href: "/dashboard/customers", label: "Customers", icon: "groups" },
+  { href: "/dashboard/customers/analytics", label: "Customer Analytics", icon: "analytics" },
   { href: "/dashboard/pricing", label: "Pricing Plans", icon: "sell" },
   { href: "/dashboard/vouchers", label: "Vouchers", icon: "confirmation_number" },
   { href: "/dashboard/revenue", label: "Revenue", icon: "trending_up" },

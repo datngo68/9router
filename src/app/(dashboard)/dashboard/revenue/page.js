@@ -2,9 +2,25 @@
 
 import { useEffect, useState } from "react";
 import { Card } from "@/shared/components";
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+} from "recharts";
 
 function fmtVnd(v) { return Number(v || 0).toLocaleString("vi-VN") + "đ"; }
 function fmtUsd(v) { return `$${Number(v || 0).toFixed(3)}`; }
+function fmtVndShort(v) {
+  const n = Number(v || 0);
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`;
+  return String(n);
+}
 
 export default function AdminRevenuePage() {
   const [period, setPeriod] = useState("30d");
@@ -62,16 +78,42 @@ export default function AdminRevenuePage() {
 
           <Card>
             <h2 className="font-semibold mb-3">Doanh thu theo ngày</h2>
-            <div className="grid items-end gap-1" style={{ gridTemplateColumns: `repeat(${data.byDay.length}, 1fr)`, height: 180 }}>
-              {data.byDay.map((d) => {
-                const h = Math.round((d.revenueVnd / max) * 100);
-                return (
-                  <div key={d.day} className="flex flex-col items-center gap-1">
-                    <div className="w-full rounded bg-primary/40 hover:bg-primary/60 transition" style={{ height: `${h}%`, minHeight: d.revenueVnd > 0 ? "2px" : "0" }} title={`${d.day}: ${fmtVnd(d.revenueVnd)}`} />
-                    <span className="text-[10px] text-text-muted">{d.day.slice(5)}</span>
-                  </div>
-                );
-              })}
+            <div style={{ width: "100%", height: 340 }}>
+              <ResponsiveContainer>
+                <BarChart data={data.byDay} margin={{ top: 8, right: 12, bottom: 8, left: 8 }}>
+                  <CartesianGrid stroke="var(--color-border-subtle)" strokeDasharray="3 3" vertical={false} />
+                  <XAxis
+                    dataKey="day"
+                    tickFormatter={(d) => d.slice(5)}
+                    tick={{ fill: "var(--color-text-muted)", fontSize: 11 }}
+                    stroke="var(--color-border)"
+                    interval="preserveStartEnd"
+                    minTickGap={16}
+                  />
+                  <YAxis
+                    tickFormatter={fmtVndShort}
+                    tick={{ fill: "var(--color-text-muted)", fontSize: 11 }}
+                    stroke="var(--color-border)"
+                    width={60}
+                  />
+                  <Tooltip
+                    cursor={{ fill: "var(--color-surface-2)", opacity: 0.4 }}
+                    contentStyle={{
+                      background: "var(--color-surface)",
+                      border: "1px solid var(--color-border)",
+                      borderRadius: 8,
+                      fontSize: 12,
+                    }}
+                    labelStyle={{ color: "var(--color-text-muted)" }}
+                    formatter={(value, _name, item) => [
+                      fmtVnd(value),
+                      `Doanh thu (${item?.payload?.orders ?? 0} đơn)`,
+                    ]}
+                    labelFormatter={(d) => `Ngày ${d}`}
+                  />
+                  <Bar dataKey="revenueVnd" fill="var(--color-primary)" radius={[4, 4, 0, 0]} maxBarSize={36} />
+                </BarChart>
+              </ResponsiveContainer>
             </div>
           </Card>
 

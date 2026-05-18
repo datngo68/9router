@@ -51,35 +51,31 @@ export default function AdminVouchersPage() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        const [vRes, pRes] = await Promise.all([
-          fetch("/api/admin/vouchers", { cache: "no-store" }).then((r) => r.json()),
-          fetch("/api/admin/pricing-plans", { cache: "no-store" }).then((r) => r.json()),
-        ]);
-        if (cancelled) return;
-        setVouchers(vRes.vouchers || []);
-        setPlans(pRes.plans || []);
-      } catch (e) {
-        if (cancelled) return;
-        console.log("[admin/vouchers] load failed:", e?.message);
-        setVouchers([]);
-        setPlans([]);
-      }
+      // Fetch vouchers + plans độc lập: nếu một endpoint fail (ví dụ vouchers
+      // throw vì DB chưa có row), endpoint kia vẫn render dữ liệu — tránh case
+      // "Chưa có gói nào" hiện nhầm khi pricing-plans thực ra trả về OK.
+      const [vRes, pRes] = await Promise.allSettled([
+        fetch("/api/admin/vouchers", { cache: "no-store" }).then((r) => r.json()),
+        fetch("/api/admin/pricing-plans", { cache: "no-store" }).then((r) => r.json()),
+      ]);
+      if (cancelled) return;
+      if (vRes.status === "fulfilled") setVouchers(vRes.value?.vouchers || []);
+      else { console.log("[admin/vouchers] vouchers load failed:", vRes.reason?.message); setVouchers([]); }
+      if (pRes.status === "fulfilled") setPlans(pRes.value?.plans || []);
+      else { console.log("[admin/vouchers] plans load failed:", pRes.reason?.message); setPlans([]); }
     })();
     return () => { cancelled = true; };
   }, []);
 
   async function load() {
-    try {
-      const [vRes, pRes] = await Promise.all([
-        fetch("/api/admin/vouchers", { cache: "no-store" }).then((r) => r.json()),
-        fetch("/api/admin/pricing-plans", { cache: "no-store" }).then((r) => r.json()),
-      ]);
-      setVouchers(vRes.vouchers || []);
-      setPlans(pRes.plans || []);
-    } catch (e) {
-      console.log("[admin/vouchers] reload failed:", e?.message);
-    }
+    const [vRes, pRes] = await Promise.allSettled([
+      fetch("/api/admin/vouchers", { cache: "no-store" }).then((r) => r.json()),
+      fetch("/api/admin/pricing-plans", { cache: "no-store" }).then((r) => r.json()),
+    ]);
+    if (vRes.status === "fulfilled") setVouchers(vRes.value?.vouchers || []);
+    else console.log("[admin/vouchers] vouchers reload failed:", vRes.reason?.message);
+    if (pRes.status === "fulfilled") setPlans(pRes.value?.plans || []);
+    else console.log("[admin/vouchers] plans reload failed:", pRes.reason?.message);
   }
 
   const planLookup = useMemo(
