@@ -137,6 +137,7 @@ export default function AdminOrdersPage() {
                   <th className="px-3 py-2 text-left">Khách</th>
                   <th className="px-3 py-2 text-left">Plan</th>
                   <th className="px-3 py-2 text-right">Tiền</th>
+                  <th className="px-3 py-2 text-left">Voucher</th>
                   <th className="px-3 py-2 text-left">Status</th>
                   <th className="px-3 py-2 text-left">Tạo lúc</th>
                   <th className="px-3 py-2"></th>
@@ -148,7 +149,23 @@ export default function AdminOrdersPage() {
                     <td className="px-3 py-2 font-mono text-xs">{o.id}</td>
                     <td className="px-3 py-2 text-xs text-text-muted">{o.customerId.slice(0, 8)}...</td>
                     <td className="px-3 py-2 text-xs">{o.planId.slice(0, 8)}...</td>
-                    <td className="px-3 py-2 text-right">{fmtVnd(o.priceVnd)}</td>
+                    <td className="px-3 py-2 text-right">
+                      {o.discountVnd > 0 ? (
+                        <div className="flex flex-col items-end leading-tight">
+                          <span>{fmtVnd(o.priceVnd)}</span>
+                          <span className="text-[10px] text-text-muted line-through">{fmtVnd(o.originalPriceVnd)}</span>
+                        </div>
+                      ) : (
+                        fmtVnd(o.priceVnd)
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-xs">
+                      {o.voucherCode ? (
+                        <span className="font-mono text-green-600">{o.voucherCode}</span>
+                      ) : (
+                        <span className="text-text-muted">—</span>
+                      )}
+                    </td>
                     <td className="px-3 py-2"><span className={`rounded-full px-2 py-0.5 text-[11px] ${STATUS_COLOR[o.status] || ""}`}>{o.status}</span></td>
                     <td className="px-3 py-2 text-xs text-text-muted">{fmtTime(o.createdAt)}</td>
                     <td className="px-3 py-2 text-right whitespace-nowrap">

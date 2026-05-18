@@ -34,6 +34,7 @@ function rowToPlan(row) {
     maxTokensPerRequest: normalizeNonNegativeInt(row.maxTokensPerRequest),
     expiresAfterDays: normalizeNonNegativeInt(row.expiresAfterDays),
     allowedModels: normalizeAllowedModels(row.allowedModels),
+    maxPurchasesPerCustomer: normalizeNonNegativeInt(row.maxPurchasesPerCustomer),
     isActive: row.isActive === 1 || row.isActive === true,
     sortOrder: normalizeNonNegativeInt(row.sortOrder),
     createdAt: row.createdAt,
@@ -64,8 +65,8 @@ export async function createPricingPlan(input) {
   const id = uuidv4();
   const now = new Date().toISOString();
   db.run(
-    `INSERT INTO pricingPlans(id, kind, name, description, priceVnd, dailyTokenLimit, monthlyTokenLimit, lifetimeTokenLimit, requestsPerMinute, maxTokensPerRequest, expiresAfterDays, allowedModels, isActive, sortOrder, createdAt, updatedAt)
-     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO pricingPlans(id, kind, name, description, priceVnd, dailyTokenLimit, monthlyTokenLimit, lifetimeTokenLimit, requestsPerMinute, maxTokensPerRequest, expiresAfterDays, allowedModels, maxPurchasesPerCustomer, isActive, sortOrder, createdAt, updatedAt)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       input.kind,
@@ -79,6 +80,7 @@ export async function createPricingPlan(input) {
       normalizeNonNegativeInt(input.maxTokensPerRequest),
       normalizeNonNegativeInt(input.expiresAfterDays),
       stringifyJson(normalizeAllowedModels(input.allowedModels)),
+      normalizeNonNegativeInt(input.maxPurchasesPerCustomer),
       input.isActive === false ? 0 : 1,
       normalizeNonNegativeInt(input.sortOrder),
       now,
@@ -97,7 +99,7 @@ export async function updatePricingPlan(id, patch) {
 
   const now = new Date().toISOString();
   db.run(
-    `UPDATE pricingPlans SET kind = ?, name = ?, description = ?, priceVnd = ?, dailyTokenLimit = ?, monthlyTokenLimit = ?, lifetimeTokenLimit = ?, requestsPerMinute = ?, maxTokensPerRequest = ?, expiresAfterDays = ?, allowedModels = ?, isActive = ?, sortOrder = ?, updatedAt = ? WHERE id = ?`,
+    `UPDATE pricingPlans SET kind = ?, name = ?, description = ?, priceVnd = ?, dailyTokenLimit = ?, monthlyTokenLimit = ?, lifetimeTokenLimit = ?, requestsPerMinute = ?, maxTokensPerRequest = ?, expiresAfterDays = ?, allowedModels = ?, maxPurchasesPerCustomer = ?, isActive = ?, sortOrder = ?, updatedAt = ? WHERE id = ?`,
     [
       merged.kind,
       merged.name,
@@ -110,6 +112,7 @@ export async function updatePricingPlan(id, patch) {
       normalizeNonNegativeInt(merged.maxTokensPerRequest),
       normalizeNonNegativeInt(merged.expiresAfterDays),
       stringifyJson(normalizeAllowedModels(merged.allowedModels)),
+      normalizeNonNegativeInt(merged.maxPurchasesPerCustomer),
       merged.isActive === false ? 0 : 1,
       normalizeNonNegativeInt(merged.sortOrder),
       now,

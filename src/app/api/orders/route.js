@@ -32,6 +32,7 @@ export async function POST(request) {
   const planId = body?.planId;
   const paymentMethod = body?.paymentMethod || "bank";
   const notes = body?.notes || null;
+  const voucherCode = body?.voucherCode ? String(body.voucherCode).trim() : null;
   if (!planId) return NextResponse.json({ error: "planId is required" }, { status: 400 });
 
   const plan = await getPricingPlanById(planId);
@@ -42,7 +43,7 @@ export async function POST(request) {
 
   let order;
   try {
-    order = await createOrder({ customerId: session.customer.id, planId, paymentMethod, notes });
+    order = await createOrder({ customerId: session.customer.id, planId, paymentMethod, notes, voucherCode });
   } catch (e) {
     recordFailure(`orderCreate:${ip}`);
     return NextResponse.json({ error: e.message || "Tạo đơn thất bại" }, { status: 400 });

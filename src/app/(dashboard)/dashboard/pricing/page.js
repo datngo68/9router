@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Card, Button, Modal, Input, Toggle, ConfirmModal } from "@/shared/components";
+import { Card, Button, Modal, Input, Toggle, ConfirmModal, ModelMultiSelectField } from "@/shared/components";
 
 const EMPTY = {
   kind: "monthly",
@@ -15,6 +15,7 @@ const EMPTY = {
   maxTokensPerRequest: 0,
   expiresAfterDays: 0,
   allowedModels: [],
+  maxPurchasesPerCustomer: 0,
   isActive: true,
   sortOrder: 0,
 };
@@ -25,13 +26,36 @@ export default function AdminPricingPage() {
   const [plans, setPlans] = useState(null);
   const [editing, setEditing] = useState(null);
   const [confirm, setConfirm] = useState(null);
+  const [activeProviders, setActiveProviders] = useState([]);
+  const [modelAliases, setModelAliases] = useState({});
 
   async function load() {
     const r = await fetch("/api/admin/pricing-plans", { cache: "no-store" });
     const d = await r.json();
     setPlans(d.plans || []);
   }
-  useEffect(() => { load(); }, []);
+  async function loadProviders() {
+    try {
+      const [providersRes, aliasesRes] = await Promise.all([
+        fetch("/api/providers", { cache: "no-store" }),
+        fetch("/api/models/alias", { cache: "no-store" }),
+      ]);
+      if (providersRes.ok) {
+        const d = await providersRes.json();
+        setActiveProviders(d.connections || []);
+      }
+      if (aliasesRes.ok) {
+        const d = await aliasesRes.json();
+        setModelAliases(d.aliases || {});
+      }
+    } catch (e) {
+      console.log("Error loading providers/aliases:", e);
+    }
+  }
+  useEffect(() => {
+    load();
+    loadProviders();
+  }, []);
 
   function openNew() { setEditing({ ...EMPTY, _new: true }); }
   function openEdit(p) { setEditing({ ...p }); }
@@ -104,6 +128,7 @@ export default function AdminPricingPage() {
                   <th className="px-3 py-2 text-right">Giá</th>
                   <th className="px-3 py-2 text-right">Daily / Monthly / Lifetime</th>
                   <th className="px-3 py-2 text-right">RPM</th>
+                  <th className="px-3 py-2 text-right">Max/user</th>
                   <th className="px-3 py-2 text-center">Active</th>
                   <th className="px-3 py-2"></th>
                 </tr>
@@ -116,6 +141,7 @@ export default function AdminPricingPage() {
                     <td className="px-3 py-2 text-right">{fmtVnd(p.priceVnd)}</td>
                     <td className="px-3 py-2 text-right text-xs">{p.dailyTokenLimit || "—"} / {p.monthlyTokenLimit || "—"} / {p.lifetimeTokenLimit || "—"}</td>
                     <td className="px-3 py-2 text-right">{p.requestsPerMinute || "—"}</td>
+                    <td className="px-3 py-2 text-right text-xs">{p.maxPurchasesPerCustomer ? `${p.maxPurchasesPerCustomer} lần` : "∞"}</td>
                     <td className="px-3 py-2 text-center"><Toggle checked={p.isActive} onChange={() => toggleActive(p)} size="sm" /></td>
                     <td className="px-3 py-2 text-right">
                       <button onClick={() => openEdit(p)} className="rounded p-1 text-text-muted hover:text-primary"><span className="material-symbols-outlined text-base">edit</span></button>
@@ -159,15 +185,24 @@ export default function AdminPricingPage() {
               <Input label="Req / phút" type="number" min={0} value={editing.requestsPerMinute} onChange={(e) => setEditing({ ...editing, requestsPerMinute: Number(e.target.value) })} />
               <Input label="Max tokens / request" type="number" min={0} value={editing.maxTokensPerRequest} onChange={(e) => setEditing({ ...editing, maxTokensPerRequest: Number(e.target.value) })} />
             </div>
-            <label className="flex flex-col gap-1 text-sm">
-              <span className="text-text-muted">Allowed models <span className="text-xs">(mỗi dòng 1 model như openai/gpt-4o, để trống = tất cả)</span></span>
-              <textarea
-                rows={3}
-                value={(editing.allowedModels || []).join("\n")}
-                onChange={(e) => setEditing({ ...editing, allowedModels: e.target.value.split(/\n+/).map((s) => s.trim()).filter(Boolean) })}
-                className="rounded-lg border border-border bg-bg px-3 py-2 font-mono text-xs"
-              />
-            </label>
+            <Input
+              label="Mỗi user mua tối đa (lần)"
+              type="number"
+              min={0}
+              value={editing.maxPurchasesPerCustomer ?? 0}
+              onChange={(e) => setEditing({ ...editing, maxPurchasesPerCustomer: Number(e.target.value) })}
+              hint="0 = không giới hạn. Chỉ tính đơn pending/paid/delivered (đơn cancelled/refunded không trừ lượt)."
+            />
+            <ModelMultiSelectField
+              label="Allowed models"
+              value={editing.allowedModels || []}
+              onChange={(models) => setEditing({ ...editing, allowedModels: models })}
+              activeProviders={activeProviders}
+              modelAliases={modelAliases}
+              title="Chọn models cho gói"
+              hint="Để trống = cho phép tất cả model. Bấm 'Chọn tất cả' ở mỗi provider để gán nhanh cả nhóm."
+              addLabel="Thêm model"
+            />
             <div className="grid grid-cols-2 gap-3 items-center">
               <Input label="Sort order" type="number" min={0} value={editing.sortOrder} onChange={(e) => setEditing({ ...editing, sortOrder: Number(e.target.value) })} />
               <label className="flex items-center gap-2 text-sm pt-6">

@@ -72,28 +72,58 @@ export default function PlanCardList({ limit, kind }) {
 
   return (
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      {filtered.map((plan) => (
-        <div key={plan.id} className="flex flex-col rounded-xl border border-border-subtle bg-surface p-6 transition-colors hover:border-primary/40">
-          <div className="flex items-start justify-between">
-            <div>
-              <p className="text-xs uppercase tracking-wide text-primary">{plan.kind === "monthly" ? "Hàng tháng" : "Top-up"}</p>
-              <h3 className="mt-1 text-lg font-semibold">{plan.name}</h3>
+      {filtered.map((plan) => {
+        const limit = Number(plan.maxPurchasesPerCustomer || 0);
+        const used = Number(plan.purchasedCount || 0);
+        const limitReached = limit > 0 && used >= limit;
+        return (
+          <div key={plan.id} className="flex flex-col rounded-xl border border-border-subtle bg-surface p-6 transition-colors hover:border-primary/40">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <p className="text-xs uppercase tracking-wide text-primary">{plan.kind === "monthly" ? "Hàng tháng" : "Top-up"}</p>
+                <h3 className="mt-1 text-lg font-semibold">{plan.name}</h3>
+              </div>
+              {limit > 0 && (
+                <span
+                  className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                    limitReached
+                      ? "bg-amber-500/10 text-amber-600"
+                      : "bg-text-muted/10 text-text-muted"
+                  }`}
+                  title="Số lần bạn đã mua / giới hạn mỗi tài khoản"
+                >
+                  {used}/{limit} lần
+                </span>
+              )}
             </div>
+            {plan.description && <p className="mt-2 text-sm text-text-muted line-clamp-3">{plan.description}</p>}
+            <p className="mt-4 text-3xl font-bold">
+              {formatVnd(plan.priceVnd)}
+              {plan.kind === "monthly" && <span className="text-sm font-normal text-text-muted"> /tháng</span>}
+            </p>
+            <PlanFeatures plan={plan} />
+            <Link
+              href={`/store/plans/${plan.id}`}
+              className="mt-4 inline-flex items-center justify-center gap-1 text-xs font-medium text-primary hover:underline"
+            >
+              Xem chi tiết models
+              <span className="material-symbols-outlined text-[14px]">arrow_forward</span>
+            </Link>
+            {limitReached ? (
+              <div className="mt-6 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-2.5 text-center text-sm text-amber-600">
+                Bạn đã mua đủ {limit} lần
+              </div>
+            ) : (
+              <Link
+                href={`/store/checkout/${plan.id}`}
+                className="mt-6 block rounded-lg bg-primary px-4 py-2.5 text-center text-sm font-medium text-white hover:bg-primary/90"
+              >
+                Mua ngay
+              </Link>
+            )}
           </div>
-          {plan.description && <p className="mt-2 text-sm text-text-muted line-clamp-3">{plan.description}</p>}
-          <p className="mt-4 text-3xl font-bold">
-            {formatVnd(plan.priceVnd)}
-            {plan.kind === "monthly" && <span className="text-sm font-normal text-text-muted"> /tháng</span>}
-          </p>
-          <PlanFeatures plan={plan} />
-          <Link
-            href={`/store/checkout/${plan.id}`}
-            className="mt-6 block rounded-lg bg-primary px-4 py-2.5 text-center text-sm font-medium text-white hover:bg-primary/90"
-          >
-            Mua ngay
-          </Link>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

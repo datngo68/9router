@@ -16,6 +16,10 @@ export default function CheckoutPage() {
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [voucherInput, setVoucherInput] = useState("");
+  const [voucher, setVoucher] = useState(null); // { code, discountVnd, finalPriceVnd }
+  const [voucherChecking, setVoucherChecking] = useState(false);
+  const [voucherError, setVoucherError] = useState("");
 
   useEffect(() => {
     fetch("/api/account/me", { cache: "no-store" })
@@ -39,7 +43,7 @@ export default function CheckoutPage() {
       const res = await fetch("/api/orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ planId, paymentMethod, notes: notes || null }),
+        body: JSON.stringify({ planId, paymentMethod, notes: notes || null, voucherCode: voucher?.code || null }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -52,7 +56,41 @@ export default function CheckoutPage() {
     }
   }
 
+  async function applyVoucher() {
+    const code = voucherInput.trim().toUpperCase();
+    if (!code) return;
+    setVoucherChecking(true);
+    setVoucherError("");
+    try {
+      const res = await fetch("/api/vouchers/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code, planId }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        setVoucher(null);
+        setVoucherError(data?.reason || data?.error || "Mã không hợp lệ");
+        return;
+      }
+      setVoucher({ code: data.code, discountVnd: data.discountVnd, finalPriceVnd: data.finalPriceVnd });
+      setVoucherInput(data.code);
+    } finally {
+      setVoucherChecking(false);
+    }
+  }
+
+  function clearVoucher() {
+    setVoucher(null);
+    setVoucherInput("");
+    setVoucherError("");
+  }
+
   if (!me || !plan) return <div className="h-64 animate-pulse rounded-xl border border-border-subtle bg-surface" />;
+
+  const limit = Number(plan.maxPurchasesPerCustomer || 0);
+  const used = Number(plan.purchasedCount || 0);
+  const limitReached = limit > 0 && used >= limit;
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-6">
@@ -63,11 +101,83 @@ export default function CheckoutPage() {
         <p className="text-xs uppercase tracking-wide text-primary">{plan.kind === "monthly" ? "Hàng tháng" : "Top-up"}</p>
         <h2 className="mt-1 text-lg font-semibold">{plan.name}</h2>
         {plan.description && <p className="mt-1 text-sm text-text-muted">{plan.description}</p>}
-        <div className="mt-4 flex items-end justify-between">
-          <span className="text-text-muted text-sm">Tổng cộng</span>
-          <span className="text-2xl font-bold">{fmtVnd(plan.priceVnd)}{plan.kind === "monthly" && <span className="text-sm font-normal text-text-muted"> /tháng</span>}</span>
+        <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-text-muted">
+          <span>
+            {plan.allowedModels?.length > 0
+              ? `${plan.allowedModels.length} model được phép`
+              : "Tất cả model"}
+          </span>
+          <Link href={`/store/plans/${plan.id}`} className="text-primary hover:underline">
+            Xem chi tiết →
+          </Link>
         </div>
+        {limit > 0 && (
+          <p className="mt-3 text-xs text-text-muted">
+            Đã mua: <strong>{used}/{limit}</strong> lần (tối đa mỗi tài khoản)
+          </p>
+        )}
+        <div className="mt-4 flex items-end justify-between">
+          <span className="text-text-muted text-sm">Giá gốc</span>
+          <span className={`text-lg font-medium ${voucher ? "text-text-muted line-through" : ""}`}>
+            {fmtVnd(plan.priceVnd)}{plan.kind === "monthly" && <span className="text-sm font-normal text-text-muted"> /tháng</span>}
+          </span>
+        </div>
+        {voucher && (
+          <>
+            <div className="mt-2 flex items-end justify-between text-sm text-green-600">
+              <span>Giảm giá ({voucher.code})</span>
+              <span>− {fmtVnd(voucher.discountVnd)}</span>
+            </div>
+            <div className="mt-2 flex items-end justify-between border-t border-border-subtle pt-3">
+              <span className="text-text-muted text-sm">Thanh toán</span>
+              <span className="text-2xl font-bold">{fmtVnd(voucher.finalPriceVnd)}</span>
+            </div>
+          </>
+        )}
+        {!voucher && (
+          <div className="mt-2 flex items-end justify-between border-t border-border-subtle pt-3">
+            <span className="text-text-muted text-sm">Tổng cộng</span>
+            <span className="text-2xl font-bold">{fmtVnd(plan.priceVnd)}</span>
+          </div>
+        )}
       </div>
+
+      <div className="rounded-xl border border-border-subtle bg-surface p-6">
+        <h3 className="font-semibold">Mã giảm giá</h3>
+        {voucher ? (
+          <div className="mt-3 flex items-center justify-between rounded-lg border border-green-500/30 bg-green-500/5 px-3 py-2 text-sm">
+            <div>
+              <p className="font-mono font-medium text-green-600">{voucher.code}</p>
+              <p className="text-xs text-text-muted">Đã giảm {fmtVnd(voucher.discountVnd)}</p>
+            </div>
+            <button onClick={clearVoucher} className="text-xs text-text-muted hover:text-red-500">Bỏ mã</button>
+          </div>
+        ) : (
+          <div className="mt-3 flex gap-2">
+            <input
+              value={voucherInput}
+              onChange={(e) => { setVoucherInput(e.target.value.toUpperCase()); setVoucherError(""); }}
+              placeholder="Nhập mã, vd: SALE10"
+              className="flex-1 rounded-lg border border-border bg-bg px-3 py-2 text-sm font-mono uppercase focus:outline-none focus:border-primary"
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); applyVoucher(); } }}
+            />
+            <button
+              onClick={applyVoucher}
+              disabled={voucherChecking || !voucherInput.trim()}
+              className="rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-surface-2 disabled:opacity-50"
+            >
+              {voucherChecking ? "..." : "Áp dụng"}
+            </button>
+          </div>
+        )}
+        {voucherError && <p className="mt-2 text-xs text-red-500">{voucherError}</p>}
+      </div>
+
+      {limitReached && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-sm text-amber-600">
+          Bạn đã đạt giới hạn mua gói này ({used}/{limit}). Vui lòng chọn gói khác hoặc liên hệ admin nếu cần thêm.
+        </div>
+      )}
 
       <div className="rounded-xl border border-border-subtle bg-surface p-6">
         <h3 className="font-semibold">Phương thức thanh toán</h3>
@@ -100,10 +210,10 @@ export default function CheckoutPage() {
 
       <button
         onClick={submit}
-        disabled={busy}
+        disabled={busy || limitReached}
         className="rounded-lg bg-primary px-4 py-3 font-medium text-white hover:bg-primary/90 disabled:opacity-50"
       >
-        {busy ? "Đang tạo đơn..." : `Đặt đơn — ${fmtVnd(plan.priceVnd)}`}
+        {busy ? "Đang tạo đơn..." : limitReached ? "Đã đạt giới hạn" : `Đặt đơn — ${fmtVnd(voucher ? voucher.finalPriceVnd : plan.priceVnd)}`}
       </button>
     </div>
   );

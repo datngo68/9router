@@ -23,6 +23,7 @@ export default function ModelSelectModal({
   onClose,
   onSelect,
   onDeselect,
+  onBulkToggle,
   selectedModel,
   activeProviders = [],
   title = "Select Model",
@@ -439,7 +440,36 @@ export default function ModelSelectModal({
         )}
 
         {/* Provider models */}
-        {Object.entries(filteredGroups).map(([providerId, group]) => (
+        {Object.entries(filteredGroups).map(([providerId, group]) => {
+          const selectableModels = group.models.filter((m) => !m.isPlaceholder);
+          const allSelected =
+            selectableModels.length > 0 &&
+            selectableModels.every((m) => addedModelValues.includes(m.value));
+          const someSelected = selectableModels.some((m) =>
+            addedModelValues.includes(m.value)
+          );
+
+          const handleProviderToggle = () => {
+            if (selectableModels.length === 0) return;
+            if (typeof onBulkToggle === "function") {
+              onBulkToggle({
+                providerId,
+                models: selectableModels,
+                select: !allSelected,
+              });
+              return;
+            }
+            // Fallback: emit per-model select/deselect events
+            if (allSelected) {
+              selectableModels.forEach((m) => onDeselect && onDeselect(m));
+            } else {
+              selectableModels.forEach((m) => {
+                if (!addedModelValues.includes(m.value)) onSelect(m);
+              });
+            }
+          };
+
+          return (
           <div key={providerId}>
             {/* Provider header */}
             <div className="flex items-center gap-1.5 mb-1.5 sticky top-0 bg-surface py-0.5">
@@ -456,6 +486,22 @@ export default function ModelSelectModal({
               <span className="text-[10px] text-text-muted">
                 ({group.models.length})
               </span>
+              {selectableModels.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleProviderToggle}
+                  className={`ml-auto rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:cursor-pointer ${
+                    allSelected
+                      ? "bg-primary/15 text-primary hover:bg-primary/25"
+                      : someSelected
+                      ? "bg-primary/10 text-primary hover:bg-primary/20"
+                      : "bg-surface-2 text-text-muted hover:bg-primary/10 hover:text-primary"
+                  }`}
+                  title={allSelected ? "Bỏ chọn tất cả model của provider này" : "Chọn tất cả model của provider này"}
+                >
+                  {allSelected ? "Bỏ chọn tất cả" : "Chọn tất cả"}
+                </button>
+              )}
             </div>
 
             <div className="flex flex-wrap gap-1.5">
@@ -502,7 +548,8 @@ export default function ModelSelectModal({
               })}
             </div>
           </div>
-        ))}
+          );
+        })}
 
         {Object.keys(filteredGroups).length === 0 && filteredCombos.length === 0 && (
           <div className="text-center py-4 text-text-muted">
@@ -522,6 +569,7 @@ ModelSelectModal.propTypes = {
   onClose: PropTypes.func.isRequired,
   onSelect: PropTypes.func.isRequired,
   onDeselect: PropTypes.func,
+  onBulkToggle: PropTypes.func,
   selectedModel: PropTypes.string,
   activeProviders: PropTypes.arrayOf(
     PropTypes.shape({

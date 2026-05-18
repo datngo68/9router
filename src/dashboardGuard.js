@@ -258,6 +258,7 @@ export async function proxy(request) {
     // Customer routes verify session in-handler — bypass admin auth.
     if (pathname.startsWith("/api/account/") || pathname === "/api/account") return NextResponse.next();
     if (pathname.startsWith("/api/orders/") || pathname === "/api/orders") return NextResponse.next();
+    if (pathname.startsWith("/api/vouchers/") || pathname === "/api/vouchers") return NextResponse.next();
     if (await hasValidCliToken(request) || await isAuthenticated(request))
       return NextResponse.next();
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

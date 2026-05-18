@@ -60,17 +60,28 @@ export default function AccountUsagePage() {
 
           <div className="rounded-xl border border-border-subtle bg-surface p-6">
             <h2 className="font-semibold">Tokens theo ngày</h2>
-            <div className="mt-4 grid items-end gap-1" style={{ gridTemplateColumns: `repeat(${data.byDay.length}, 1fr)`, height: 160 }}>
-              {data.byDay.map((d) => {
-                const total = d.promptTokens + d.completionTokens;
-                const h = Math.round((total / max) * 100);
-                return (
-                  <div key={d.day} className="flex flex-col items-center gap-1">
-                    <div className="w-full rounded bg-primary/40 hover:bg-primary/60 transition" style={{ height: `${h}%`, minHeight: total > 0 ? "2px" : "0" }} title={`${d.day}: ${n(total)}`} />
-                    <span className="text-[10px] text-text-muted">{d.day.slice(5)}</span>
-                  </div>
-                );
-              })}
+            <div className="mt-4 flex flex-col gap-1">
+              <div className="flex items-end gap-1" style={{ height: 200 }}>
+                {data.byDay.map((d) => {
+                  const total = d.promptTokens + d.completionTokens;
+                  const h = Math.round((total / max) * 100);
+                  return (
+                    <div
+                      key={d.day}
+                      className="flex-1 rounded bg-primary/40 transition hover:bg-primary/60"
+                      style={{ height: `${h}%`, minHeight: total > 0 ? "4px" : "0" }}
+                      title={`${d.day}: ${n(total)}`}
+                    />
+                  );
+                })}
+              </div>
+              <div className="flex gap-1">
+                {data.byDay.map((d) => (
+                  <span key={d.day} className="flex-1 text-center text-[10px] text-text-muted">
+                    {d.day.slice(5)}
+                  </span>
+                ))}
+              </div>
             </div>
           </div>
 

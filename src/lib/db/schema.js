@@ -1,5 +1,5 @@
 // Latest schema version — bumped when a migration is added in ./migrations/
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 13;
 
 export const PRAGMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -170,6 +170,7 @@ export const TABLES = {
       maxTokensPerRequest: "INTEGER DEFAULT 0",
       expiresAfterDays: "INTEGER DEFAULT 0",
       allowedModels: "TEXT DEFAULT '[]'",
+      maxPurchasesPerCustomer: "INTEGER DEFAULT 0",
       isActive: "INTEGER DEFAULT 1",
       sortOrder: "INTEGER DEFAULT 0",
       createdAt: "TEXT NOT NULL",
@@ -187,6 +188,10 @@ export const TABLES = {
       planId: "TEXT NOT NULL",
       status: "TEXT NOT NULL DEFAULT 'pending'",
       priceVnd: "INTEGER NOT NULL DEFAULT 0",
+      originalPriceVnd: "INTEGER",
+      discountVnd: "INTEGER NOT NULL DEFAULT 0",
+      voucherId: "TEXT",
+      voucherCode: "TEXT",
       paymentMethod: "TEXT",
       paymentRef: "TEXT",
       apiKeyId: "TEXT",
@@ -201,6 +206,46 @@ export const TABLES = {
       "CREATE INDEX IF NOT EXISTS idx_ord_customer ON orders(customerId)",
       "CREATE INDEX IF NOT EXISTS idx_ord_status ON orders(status)",
       "CREATE INDEX IF NOT EXISTS idx_ord_created ON orders(createdAt DESC)",
+    ],
+  },
+  vouchers: {
+    columns: {
+      id: "TEXT PRIMARY KEY",
+      code: "TEXT UNIQUE NOT NULL",
+      description: "TEXT",
+      kind: "TEXT NOT NULL",
+      value: "INTEGER NOT NULL DEFAULT 0",
+      scopePlanIds: "TEXT NOT NULL DEFAULT '[]'",
+      maxUses: "INTEGER NOT NULL DEFAULT 0",
+      maxPerCustomer: "INTEGER NOT NULL DEFAULT 0",
+      usedCount: "INTEGER NOT NULL DEFAULT 0",
+      validFrom: "TEXT",
+      validTo: "TEXT",
+      minOrderVnd: "INTEGER NOT NULL DEFAULT 0",
+      firstOrderOnly: "INTEGER NOT NULL DEFAULT 0",
+      isActive: "INTEGER NOT NULL DEFAULT 1",
+      createdAt: "TEXT NOT NULL",
+      updatedAt: "TEXT NOT NULL",
+    },
+    indexes: [
+      "CREATE INDEX IF NOT EXISTS idx_voucher_active ON vouchers(isActive)",
+      "CREATE INDEX IF NOT EXISTS idx_voucher_code ON vouchers(code)",
+    ],
+  },
+  voucherRedemptions: {
+    columns: {
+      id: "TEXT PRIMARY KEY",
+      voucherId: "TEXT NOT NULL",
+      customerId: "TEXT NOT NULL",
+      orderId: "TEXT NOT NULL",
+      discountVnd: "INTEGER NOT NULL DEFAULT 0",
+      redeemedAt: "TEXT NOT NULL",
+    },
+    indexes: [
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_vr_voucher_order ON voucherRedemptions(voucherId, orderId)",
+      "CREATE INDEX IF NOT EXISTS idx_vr_voucher ON voucherRedemptions(voucherId)",
+      "CREATE INDEX IF NOT EXISTS idx_vr_customer ON voucherRedemptions(customerId)",
+      "CREATE INDEX IF NOT EXISTS idx_vr_voucher_customer ON voucherRedemptions(voucherId, customerId)",
     ],
   },
   combos: {

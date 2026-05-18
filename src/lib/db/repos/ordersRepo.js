@@ -14,6 +14,7 @@ import crypto from "node:crypto";
 import { getAdapter } from "../driver.js";
 import { getPricingPlanById, planToApiKeyPolicy } from "./pricingPlansRepo.js";
 import { hashApiKey } from "./apiKeysRepo.js";
+import { validateVoucherForOrder, redeemVoucherInTxn } from "./vouchersRepo.js";
 
 const ORDER_STATUS = new Set(["pending", "paid", "delivered", "cancelled", "refunded"]);
 
@@ -30,6 +31,10 @@ function rowToOrder(row) {
     planId: row.planId,
     status: row.status,
     priceVnd: Number(row.priceVnd || 0),
+    originalPriceVnd: row.originalPriceVnd != null ? Number(row.originalPriceVnd) : Number(row.priceVnd || 0),
+    discountVnd: Number(row.discountVnd || 0),
+    voucherId: row.voucherId || null,
+    voucherCode: row.voucherCode || null,
     paymentMethod: row.paymentMethod || null,
     paymentRef: row.paymentRef || null,
     apiKeyId: row.apiKeyId || null,
@@ -45,21 +50,86 @@ function rowToOrder(row) {
   };
 }
 
-export async function createOrder({ customerId, planId, paymentMethod = "bank", notes = null }) {
+export async function createOrder({ customerId, planId, paymentMethod = "bank", notes = null, voucherCode = null }) {
   if (!customerId) throw new Error("customerId is required");
   if (!planId) throw new Error("planId is required");
   const plan = await getPricingPlanById(planId);
   if (!plan) throw new Error("plan not found");
   if (!plan.isActive) throw new Error("plan is inactive");
 
+  if (plan.maxPurchasesPerCustomer > 0) {
+    const purchased = await countCustomerPlanPurchases({ customerId, planId });
+    if (purchased >= plan.maxPurchasesPerCustomer) {
+      throw new Error(`Bạn đã mua gói này tối đa ${plan.maxPurchasesPerCustomer} lần`);
+    }
+  }
+
+  // Voucher resolution: dry-run validate before opening the transaction so we
+  // can return a clean human error. Inside the txn we re-check + redeem
+  // atomically to handle race conditions on maxUses.
+  let voucherCheck = null;
+  if (voucherCode) {
+    voucherCheck = await validateVoucherForOrder({
+      code: voucherCode,
+      customerId,
+      plan,
+    });
+    if (!voucherCheck.ok) throw new Error(voucherCheck.reason || "Voucher không hợp lệ");
+  }
+
   const db = await getAdapter();
   const id = `9R-${shortRef()}`;
   const now = new Date().toISOString();
-  db.run(
-    `INSERT INTO orders(id, customerId, planId, status, priceVnd, paymentMethod, notes, createdAt) VALUES(?, ?, ?, 'pending', ?, ?, ?, ?)`,
-    [id, customerId, planId, plan.priceVnd, paymentMethod, notes, now]
-  );
+  const originalPriceVnd = plan.priceVnd;
+  const discountVnd = voucherCheck?.discountVnd || 0;
+  const finalPriceVnd = Math.max(0, originalPriceVnd - discountVnd);
+
+  db.transaction(() => {
+    db.run(
+      `INSERT INTO orders(id, customerId, planId, status, priceVnd, originalPriceVnd, discountVnd, voucherId, voucherCode, paymentMethod, notes, createdAt) VALUES(?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        customerId,
+        planId,
+        finalPriceVnd,
+        originalPriceVnd,
+        discountVnd,
+        voucherCheck?.voucher?.id || null,
+        voucherCheck?.voucher?.code || null,
+        paymentMethod,
+        notes,
+        now,
+      ]
+    );
+    if (voucherCheck?.voucher) {
+      redeemVoucherInTxn({
+        db,
+        voucherId: voucherCheck.voucher.id,
+        customerId,
+        orderId: id,
+        discountVnd,
+        planId,
+        planPriceVnd: originalPriceVnd,
+      });
+    }
+  });
   return getOrderById(id);
+}
+
+/**
+ * Counts how many orders of (customerId, planId) consume a purchase slot.
+ * Status policy: pending / paid / delivered all count (so a user can't
+ * spam-create pending orders to bypass the limit). Cancelled and refunded
+ * do NOT count — they free the slot back up.
+ */
+export async function countCustomerPlanPurchases({ customerId, planId }) {
+  if (!customerId || !planId) return 0;
+  const db = await getAdapter();
+  const row = db.get(
+    `SELECT COUNT(*) AS n FROM orders WHERE customerId = ? AND planId = ? AND status IN ('pending', 'paid', 'delivered')`,
+    [customerId, planId]
+  );
+  return Number(row?.n || 0);
 }
 
 export async function getOrderById(id) {

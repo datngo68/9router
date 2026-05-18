@@ -62,7 +62,16 @@ export {
   createOrder, getOrderById, getOrders,
   cancelOrder, markOrderRefunded, confirmOrderAtomic,
   attachApibankOrder, findOrderByApibankRef,
+  countCustomerPlanPurchases,
 } from "./repos/ordersRepo.js";
+
+// Storefront — vouchers
+export {
+  getVouchers, getVoucherById, getVoucherByCode,
+  createVoucher, updateVoucher, deleteVoucher,
+  validateVoucherForOrder, redeemVoucherInTxn,
+  getRedemptionsForVoucher,
+} from "./repos/vouchersRepo.js";
 
 // Combos
 export {

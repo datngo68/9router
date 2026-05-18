@@ -26,13 +26,42 @@ export default function ModelMultiSelectField({
     onChange(selectedModels.filter((item) => item !== model.value));
   };
 
+  const handleBulkToggle = ({ models = [], select }) => {
+    const values = models.map((m) => m?.value).filter(Boolean);
+    if (values.length === 0) return;
+    if (select) {
+      const set = new Set(selectedModels);
+      values.forEach((v) => set.add(v));
+      onChange(Array.from(set));
+    } else {
+      const remove = new Set(values);
+      onChange(selectedModels.filter((v) => !remove.has(v)));
+    }
+  };
+
   const handleRemove = (modelValue) => {
     onChange(selectedModels.filter((item) => item !== modelValue));
   };
 
+  const handleClearAll = () => {
+    if (selectedModels.length === 0) return;
+    onChange([]);
+  };
+
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="text-sm font-medium text-text-main">{label}</label>
+      <div className="flex items-center justify-between gap-2">
+        <label className="text-sm font-medium text-text-main">{label}</label>
+        {selectedModels.length > 0 && (
+          <button
+            type="button"
+            onClick={handleClearAll}
+            className="text-[11px] text-text-muted hover:text-red-500 transition-colors"
+          >
+            Xóa tất cả ({selectedModels.length})
+          </button>
+        )}
+      </div>
       {selectedModels.length === 0 ? (
         <div className="rounded-lg border border-dashed border-border-subtle bg-surface-2/60 px-3 py-3 text-center text-xs text-text-muted">
           All models allowed
@@ -68,6 +97,7 @@ export default function ModelMultiSelectField({
         onClose={() => setIsOpen(false)}
         onSelect={handleSelect}
         onDeselect={handleDeselect}
+        onBulkToggle={handleBulkToggle}
         activeProviders={activeProviders}
         modelAliases={modelAliases}
         title={title}
