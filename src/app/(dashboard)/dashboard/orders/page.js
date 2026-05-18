@@ -82,6 +82,30 @@ export default function AdminOrdersPage() {
     });
   }
 
+  async function reconcileApibank(order) {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/admin/orders/${order.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "apibank-reconcile" }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data?.error || "Đối soát thất bại");
+        return;
+      }
+      if (data?.ok && data?.apiKey?.key) {
+        setModalKey({ key: data.apiKey.key, display: data.apiKey.keyDisplay, orderId: order.id });
+      } else if (data?.ok && data?.alreadyDelivered) {
+        alert("Đơn đã được giao trước đó.");
+      } else if (data?.message) {
+        alert(data.message);
+      }
+      load();
+    } finally { setBusy(false); }
+  }
+
   return (
     <div className="flex flex-col gap-6">
       <div>
@@ -131,6 +155,16 @@ export default function AdminOrdersPage() {
                       {o.status === "pending" && (
                         <>
                           <button onClick={() => setConfirming(o)} className="mr-1 rounded border border-green-500/40 bg-green-500/10 px-2 py-1 text-xs text-green-600 hover:bg-green-500/20">Confirm</button>
+                          {o.apibankOrderId && (
+                            <button
+                              onClick={() => reconcileApibank(o)}
+                              disabled={busy}
+                              className="mr-1 rounded border border-blue-500/40 bg-blue-500/10 px-2 py-1 text-xs text-blue-600 hover:bg-blue-500/20"
+                              title="Hỏi APIBank trạng thái thật rồi gạch nợ nếu đã paid"
+                            >
+                              Đối soát APIBank
+                            </button>
+                          )}
                           <button onClick={() => askCancel(o)} className="rounded border border-border px-2 py-1 text-xs text-text-muted hover:text-red-500">Cancel</button>
                         </>
                       )}

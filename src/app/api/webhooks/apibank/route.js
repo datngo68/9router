@@ -77,9 +77,27 @@ export async function POST(request) {
   }
 
   const data = evt?.data || {};
-  const routerOrderId = data?.metadata?.router_order_id || data?.customer_ref;
-  const apibankOrderId = data?.order_id;
-  const apibankCode = data?.code;
+  // APIBank payload có cả flat keys (preferred) lẫn nested order/transaction
+  // (legacy alias). Đọc cả hai để robust với mọi version của APIBank.
+  //   data.order_id          | data.order.id
+  //   data.code              | data.order.code
+  //   data.amount_vnd        | data.order.amount_vnd | data.order.amount
+  //   data.customer_ref      | (router_order_id của 9router)
+  //   data.metadata          | (chứa router_order_id nếu có)
+  //   data.bank_ref_no       | data.transaction.bank_ref_no | data.transaction.ref
+  //   data.transaction_id    | data.transaction.id
+  const orderObj = data.order || {};
+  const txObj = data.transaction || {};
+  const apibankOrderId = data.order_id || orderObj.id || null;
+  const apibankCode = data.code || orderObj.code || null;
+  const amountVnd = Number(
+    data.amount_vnd ?? orderObj.amount_vnd ?? orderObj.amount ?? 0,
+  );
+  const customerRef = data.customer_ref || null;
+  const metadata = data.metadata || {};
+  const routerOrderId = metadata?.router_order_id || customerRef || null;
+  const paymentRef =
+    data.bank_ref_no || txObj.bank_ref_no || txObj.ref || data.transaction_id || txObj.id || apibankOrderId || null;
 
   // Dedup: claim the event id atomically. If we lose the race (already
   // claimed), still return 200 so APIBank stops retrying.
@@ -108,8 +126,8 @@ export async function POST(request) {
 
   // Cross-check amount as defence-in-depth. APIBank already matched amount
   // exactly, but double-check before issuing a key.
-  if (Number(data?.amount_vnd || 0) !== Number(order.priceVnd || 0)) {
-    console.log(`[apibank webhook] amount mismatch for ${order.id}: webhook=${data?.amount_vnd} order=${order.priceVnd}`);
+  if (amountVnd !== Number(order.priceVnd || 0)) {
+    console.log(`[apibank webhook] amount mismatch for ${order.id}: webhook=${amountVnd} order=${order.priceVnd}`);
     await markWebhookEventProcessed(evtId);
     return NextResponse.json({ error: "amount mismatch" }, { status: 409 });
   }
@@ -130,7 +148,6 @@ export async function POST(request) {
   let result;
   try {
     const machineId = await getConsistentMachineId();
-    const paymentRef = data?.bank_ref_no || data?.transaction_id || apibankOrderId || null;
     result = await confirmOrderAtomic({
       orderId: order.id,
       paymentRef,
