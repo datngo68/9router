@@ -6,6 +6,7 @@ import {
   getApiKeyMonthlyTokenUsage,
   getApiKeyLifetimeTokenUsage,
 } from "@/lib/db/repos/usageRepo.js";
+import { getReferralAdminInfo } from "@/lib/db/repos/referralsRepo";
 import { requireRole } from "@/lib/auth/rbac";
 
 export const dynamic = "force-dynamic";
@@ -134,6 +135,9 @@ export async function GET(_request, { params }) {
     value: r.value != null ? Number(r.value) : null,
   }));
 
+  // ── referral info ─────────────────────────────────────────────────────
+  const referral = await getReferralAdminInfo(id);
+
   return NextResponse.json({
     customer,
     orders,
@@ -150,6 +154,7 @@ export async function GET(_request, { params }) {
     usageByModel,
     keyLimitsUsage,
     voucherRedemptions,
+    referral,
   });
 }
 

@@ -68,7 +68,7 @@ export default function AdminCustomerDetailPage() {
   if (!data) return <div className="h-64 animate-pulse rounded-xl border border-border-subtle bg-surface" />;
   if (data.error) return <Card><p className="text-red-500">{data.error}</p></Card>;
 
-  const { customer, orders, keys, summary, usageDaily, usageByModel, keyLimitsUsage, voucherRedemptions } = data;
+  const { customer, orders, keys, summary, usageDaily, usageByModel, keyLimitsUsage, voucherRedemptions, referral } = data;
   return (
     <div className="flex flex-col gap-6">
       <div>
@@ -101,6 +101,7 @@ export default function AdminCustomerDetailPage() {
           summary={summary}
           customer={customer}
           keys={keys}
+          referral={referral}
           notes={notes}
           setNotes={setNotes}
           saveNotes={saveNotes}
@@ -173,7 +174,7 @@ export default function AdminCustomerDetailPage() {
   );
 }
 
-function OverviewTab({ summary, customer, keys, notes, setNotes, saveNotes, savedMsg }) {
+function OverviewTab({ summary, customer, keys, referral, notes, setNotes, saveNotes, savedMsg }) {
   const activeKeys = keys.filter((k) => k.isActive).length;
   return (
     <div className="flex flex-col gap-6">
@@ -209,6 +210,32 @@ function OverviewTab({ summary, customer, keys, notes, setNotes, saveNotes, save
           <dt className="text-text-muted">Đơn cuối</dt><dd>{fmtTime(summary.lastOrderAt)}</dd>
         </dl>
       </Card>
+
+      {referral && (
+        <Card>
+          <h2 className="font-semibold mb-2">Giới thiệu</h2>
+          <dl className="grid grid-cols-2 gap-y-2 text-sm">
+            <dt className="text-text-muted">Mã giới thiệu</dt>
+            <dd><code className="rounded bg-surface-2 px-2 py-0.5 font-mono">{referral.referralCode || "—"}</code></dd>
+            <dt className="text-text-muted">Được giới thiệu bởi</dt>
+            <dd>
+              {referral.referrer ? (
+                <Link href={`/dashboard/customers/${referral.referrer.id}`} className="text-primary hover:underline">
+                  {referral.referrer.email}
+                </Link>
+              ) : referral.referredBy ? (
+                <span className="font-mono text-xs">{referral.referredBy} (không tìm thấy)</span>
+              ) : "—"}
+            </dd>
+            <dt className="text-text-muted">Số người đã giới thiệu</dt>
+            <dd>{fmtNum(referral.referredCount)}</dd>
+            <dt className="text-text-muted">Đơn đầu đã thưởng</dt>
+            <dd>{fmtNum(referral.grantsAsReferrer)}</dd>
+            <dt className="text-text-muted">Token đã thưởng (nhận)</dt>
+            <dd>{fmtNum(referral.tokensEarnedAsReferrer)}</dd>
+          </dl>
+        </Card>
+      )}
     </div>
   );
 }

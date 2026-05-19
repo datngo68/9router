@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { createCustomer } from "@/lib/localDb";
+import { recordReferralOnRegister } from "@/lib/db/repos/referralsRepo";
 import { validateRegistrationPayload } from "@/lib/auth/customerRegistration";
 import { setCustomerSessionCookie } from "@/lib/auth/customerSession";
 import { recordFailure, checkLogin, getClientIp } from "@/lib/auth/loginThrottle";
@@ -46,6 +47,15 @@ export async function POST(request) {
       return NextResponse.json({ error: "Could not register with that email" }, { status: 409 });
     }
     return apiError(e, "Registration failed", 400, "account/register");
+  }
+
+  // Best-effort referral linking — never fails registration.
+  if (parsed.value.referralCode) {
+    try {
+      await recordReferralOnRegister(customer.id, parsed.value.referralCode);
+    } catch (e) {
+      console.log("[account/register] referral link failed:", e?.message);
+    }
   }
 
   await sendWelcomeEmail({ email: customer.email, displayName: customer.displayName });

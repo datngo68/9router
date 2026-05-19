@@ -34,6 +34,7 @@ const salesItems = [
   { href: "/dashboard/api-keys", label: "API Keys", icon: "key" },
   { href: "/dashboard/pricing", label: "Pricing Plans", icon: "sell" },
   { href: "/dashboard/vouchers", label: "Vouchers", icon: "confirmation_number" },
+  { href: "/dashboard/notifications", label: "Notifications", icon: "campaign" },
   { href: "/dashboard/revenue", label: "Revenue", icon: "trending_up" },
   { href: "/dashboard/settings/store", label: "Store Settings", icon: "tune" },
 ];

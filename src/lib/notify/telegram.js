@@ -234,3 +234,21 @@ export async function notifyCustomerKeyRegenerated({ customer, key, keyDisplay }
   ].join("\n");
   return tgSend(customer.telegramChatId, text);
 }
+
+/**
+ * Generic per-customer notification — used by admin broadcast + referral rewards.
+ * Body markdown is sent as-is; caller is responsible for escaping.
+ */
+export async function notifyCustomerCustom({ customer, title, body, link }) {
+  if (!customer?.telegramChatId) return { skipped: true };
+  const lines = [`*${String(title || "").replace(/\*/g, "")}*`];
+  if (body) {
+    lines.push("");
+    lines.push(String(body));
+  }
+  if (link) {
+    lines.push("");
+    lines.push(link);
+  }
+  return tgSend(customer.telegramChatId, lines.join("\n"));
+}

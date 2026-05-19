@@ -9,6 +9,8 @@ const TABS = [
   { href: "/store/account/keys", label: "API Keys", icon: "vpn_key" },
   { href: "/store/account/usage", label: "Usage", icon: "monitoring" },
   { href: "/store/account/orders", label: "Đơn hàng", icon: "receipt_long" },
+  { href: "/store/account/notifications", label: "Thông báo", icon: "notifications" },
+  { href: "/store/account/referral", label: "Giới thiệu", icon: "redeem" },
   { href: "/store/account/profile", label: "Tài khoản", icon: "person" },
 ];
 

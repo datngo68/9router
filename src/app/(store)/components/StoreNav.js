@@ -10,6 +10,7 @@ const NAV = [
   { href: "/store/models", label: "Models" },
   { href: "/store/chat", label: "Chat" },
   { href: "/store/docs", label: "API Docs" },
+  { href: "/store/contact", label: "Liên hệ" },
 ];
 
 export default function StoreNav() {

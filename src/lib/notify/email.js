@@ -112,3 +112,34 @@ export async function sendKeyRegeneratedEmail({ email, displayName, key, keyDisp
   const html = `<p>API key vừa được làm mới (${keyDisplay}):</p><pre>${key}</pre><p>Đây là lần duy nhất hiển thị key đầy đủ. Key cũ đã bị thu hồi.</p>`;
   return sendMail({ to: email, subject, text, html });
 }
+
+export async function sendCustomNotificationEmail({ email, displayName, title, body, link }) {
+  const cfg = await readSmtpSettings();
+  const subject = `${cfg?.storeName || "9Router"} — ${title}`;
+  const greeting = displayName || email;
+  const linkLine = link ? `\n\nXem chi tiết: ${link}` : "";
+  const linkHtml = link ? `<p><a href="${link}">${link}</a></p>` : "";
+  const safeBody = String(body || "");
+  const text = `Xin chào ${greeting},\n\n${safeBody}${linkLine}\n\n— ${cfg?.storeName || "9Router"}`;
+  const html = `<p>Xin chào ${greeting},</p><div style="white-space:pre-wrap">${escapeHtml(safeBody)}</div>${linkHtml}<p style="color:#888;font-size:12px">— ${cfg?.storeName || "9Router"}</p>`;
+  return sendMail({ to: email, subject, text, html });
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+export async function sendReferralRewardEmail({ email, displayName, role, refereeEmail, bonusTokens, portalUrl }) {
+  const cfg = await readSmtpSettings();
+  const subject = `${cfg?.storeName || "9Router"} — Bạn vừa nhận thưởng giới thiệu`;
+  const greeting = displayName || email;
+  const intro = role === "referrer"
+    ? `Khách hàng ${refereeEmail} mà bạn giới thiệu vừa hoàn tất đơn đầu tiên.`
+    : `Cảm ơn bạn đã đăng ký qua mã giới thiệu.`;
+  const text = `Xin chào ${greeting},\n\n${intro}\n\nBạn được cộng thêm ${Number(bonusTokens).toLocaleString("vi-VN")} token vào lifetime quota của API key.\n\nQuản lý: ${portalUrl || ""}`;
+  const html = `<p>Xin chào ${greeting},</p><p>${intro}</p><p>Bạn được cộng thêm <strong>${Number(bonusTokens).toLocaleString("vi-VN")} token</strong> vào lifetime quota của API key.</p>${portalUrl ? `<p><a href="${portalUrl}">Quản lý key</a></p>` : ""}`;
+  return sendMail({ to: email, subject, text, html });
+}

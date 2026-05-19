@@ -20,10 +20,12 @@ function LoginForm() {
     setBusy(true);
     setError("");
     try {
+      const payload = { email, password };
+      if (totpCode.trim()) payload.totpCode = totpCode.trim();
       const res = await fetch("/api/account/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, totpCode }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!res.ok) {

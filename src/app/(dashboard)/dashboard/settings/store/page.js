@@ -11,6 +11,22 @@ const STORE_FIELDS = [
   { key: "paymentInstructions", label: "Ghi chú thêm cho khách (tùy chọn)", textarea: true, placeholder: "Hướng dẫn thanh toán mở rộng, lưu ý đặc biệt cho khách..." },
 ];
 
+const CONTACT_FIELDS = [
+  { key: "contactEmail", label: "Email hỗ trợ", placeholder: "support@example.com" },
+  { key: "contactPhone", label: "Hotline / Điện thoại", placeholder: "0987 654 321" },
+  { key: "contactTelegram", label: "Telegram (username hoặc URL)", placeholder: "@your_support hoặc https://t.me/your_support" },
+  { key: "contactZalo", label: "Zalo (số điện thoại hoặc link)", placeholder: "0987654321 hoặc https://zalo.me/0987654321" },
+  { key: "contactFacebook", label: "Facebook page", placeholder: "https://facebook.com/your-page" },
+  { key: "contactAddress", label: "Địa chỉ", placeholder: "Số nhà, đường, quận, thành phố" },
+  { key: "contactBusinessHours", label: "Giờ làm việc", placeholder: "T2-T6: 9h-18h" },
+  { key: "contactNote", label: "Ghi chú thêm", textarea: true, placeholder: "Thông tin liên hệ bổ sung hiển thị trên trang /store/contact" },
+];
+
+const REFERRAL_FIELDS = [
+  { key: "referralRefereeBonusTokens", label: "Token thưởng cho người được giới thiệu", type: "number", placeholder: "100000", hint: "Cộng vào lifetimeTokenLimit của API key đầu tiên." },
+  { key: "referralReferrerBonusTokens", label: "Token thưởng cho người giới thiệu", type: "number", placeholder: "100000", hint: "Cộng vào lifetimeTokenLimit của API key cũ nhất đang active." },
+];
+
 const TELEGRAM_FIELDS = [
   { key: "telegramBotToken", label: "Bot token", placeholder: "123456:ABC-DEF...", type: "password", hint: "Tạo bot qua @BotFather. Lưu lại token rồi paste vào đây." },
 ];
@@ -263,6 +279,39 @@ export default function StoreSettingsPage() {
         <div className="mt-4 flex gap-3">
           <Button onClick={() => save(Object.fromEntries(STORE_FIELDS.map((f) => [f.key, settings[f.key] ?? ""])))} disabled={busy}>Lưu</Button>
           {msg && <span className="self-center text-sm text-text-muted">{msg}</span>}
+        </div>
+      </Card>
+
+      <Card>
+        <h2 className="mb-1 font-semibold">Thông tin liên hệ</h2>
+        <p className="mb-3 text-xs text-text-muted">Hiển thị tại trang /store/contact. Để trống nếu không dùng kênh đó.</p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {CONTACT_FIELDS.filter((f) => !f.textarea).map((f) => field(f))}
+        </div>
+        <div className="mt-3 flex flex-col gap-3">
+          {CONTACT_FIELDS.filter((f) => f.textarea).map((f) => field(f))}
+        </div>
+        <div className="mt-4 flex gap-3">
+          <Button onClick={() => save(Object.fromEntries(CONTACT_FIELDS.map((f) => [f.key, settings[f.key] ?? ""])))} disabled={busy}>Lưu thông tin liên hệ</Button>
+        </div>
+      </Card>
+
+      <Card>
+        <h2 className="mb-1 font-semibold">Chương trình giới thiệu</h2>
+        <p className="mb-3 text-xs text-text-muted">Khi khách mua đơn ĐẦU TIÊN qua mã giới thiệu, cả hai nhận token bonus. Set 0 để tắt cộng token nhưng vẫn track referral.</p>
+        <label className="mb-3 flex items-center gap-3 text-sm">
+          <Toggle checked={!!settings.referralEnabled} onChange={(v) => setSettings({ ...settings, referralEnabled: v })} />
+          <span>Bật chương trình giới thiệu</span>
+        </label>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {REFERRAL_FIELDS.map((f) => field(f))}
+        </div>
+        <div className="mt-4 flex gap-3">
+          <Button onClick={() => save({
+            referralEnabled: !!settings.referralEnabled,
+            referralRefereeBonusTokens: Number(settings.referralRefereeBonusTokens) || 0,
+            referralReferrerBonusTokens: Number(settings.referralReferrerBonusTokens) || 0,
+          })} disabled={busy}>Lưu cấu hình giới thiệu</Button>
         </div>
       </Card>
 

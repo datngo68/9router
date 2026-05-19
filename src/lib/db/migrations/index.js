@@ -15,8 +15,10 @@ import m011 from "./011-apibank-payment.js";
 import m012 from "./012-plan-max-purchases.js";
 import m013 from "./013-vouchers.js";
 import m014 from "./014-api-key-compress-mode.js";
+import m015 from "./015-notifications.js";
+import m016 from "./016-referrals.js";
 
-export const MIGRATIONS = [m001, m002, m003, m004, m005, m006, m007, m008, m009, m010, m011, m012, m013, m014].sort((a, b) => a.version - b.version);
+export const MIGRATIONS = [m001, m002, m003, m004, m005, m006, m007, m008, m009, m010, m011, m012, m013, m014, m015, m016].sort((a, b) => a.version - b.version);
 
 export function latestVersion() {
   return MIGRATIONS.length ? MIGRATIONS[MIGRATIONS.length - 1].version : 0;

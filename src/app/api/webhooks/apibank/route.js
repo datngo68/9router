@@ -25,10 +25,12 @@ import {
 import { claimWebhookEvent, markWebhookEventProcessed } from "@/lib/db/repos/apibankWebhookEventsRepo.js";
 import { verifyWebhookSignature } from "@/lib/payments/apibank";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
-import { sendKeyDeliveredEmail } from "@/lib/notify/email";
-import { notifyCustomerKeyDelivered, notifyAdminOrderConfirmed, resolvePublicUrl } from "@/lib/notify/telegram";
+import { sendKeyDeliveredEmail, sendReferralRewardEmail } from "@/lib/notify/email";
+import { notifyCustomerKeyDelivered, notifyAdminOrderConfirmed, notifyCustomerCustom, resolvePublicUrl } from "@/lib/notify/telegram";
 import { getClientIp } from "@/lib/auth/loginThrottle";
 import { apiError } from "@/shared/utils/apiError";
+import { grantReferralRewardOnFirstDelivered } from "@/lib/db/repos/referralsRepo";
+import { createNotification } from "@/lib/db/repos/notificationsRepo";
 
 export const dynamic = "force-dynamic";
 
@@ -187,12 +189,79 @@ export async function POST(request) {
         });
       }
       await notifyAdminOrderConfirmed({ order: result.order, customer, planName: plan?.name });
+      await dispatchReferralRewards({ orderId: result.order.id });
     } catch (e) {
       console.log("[apibank webhook] notify failed:", e.message);
     }
   })();
 
   return NextResponse.json({ ok: true, orderId: result.order.id });
+}
+
+/**
+ * Grant referral bonus + dispatch notifications when an order's first
+ * delivery occurs. Best-effort: failures are logged and never thrown.
+ */
+async function dispatchReferralRewards({ orderId }) {
+  try {
+    const result = await grantReferralRewardOnFirstDelivered({ orderId });
+    if (!result?.granted) return;
+    const { reward, referrer, referee } = result;
+    const portalUrl = await resolvePublicUrl("/store/account/keys");
+
+    if (reward.referrerBonusTokens > 0) {
+      await createNotification({
+        customerId: referrer.id,
+        title: "Bạn vừa nhận thưởng giới thiệu",
+        body: `Khách hàng ${referee.email} mà bạn giới thiệu vừa hoàn tất đơn đầu tiên. Bạn được cộng ${reward.referrerBonusTokens.toLocaleString("vi-VN")} token vào lifetime quota.`,
+        type: "success",
+        link: portalUrl,
+        channels: ["inapp"],
+        createdBy: "system",
+      }).catch(() => {});
+      sendReferralRewardEmail({
+        email: referrer.email,
+        displayName: referrer.displayName,
+        role: "referrer",
+        refereeEmail: referee.email,
+        bonusTokens: reward.referrerBonusTokens,
+        portalUrl,
+      }).catch((e) => console.log("[referral] referrer email failed:", e.message));
+      notifyCustomerCustom({
+        customer: referrer,
+        title: "Bạn nhận thưởng giới thiệu",
+        body: `Khách ${referee.email} vừa hoàn tất đơn đầu. Cộng ${reward.referrerBonusTokens.toLocaleString("vi-VN")} token vào lifetime quota.`,
+        link: portalUrl,
+      }).catch((e) => console.log("[referral] referrer telegram failed:", e.message));
+    }
+    if (reward.refereeBonusTokens > 0) {
+      await createNotification({
+        customerId: referee.id,
+        title: "Bạn nhận thưởng từ chương trình giới thiệu",
+        body: `Cảm ơn bạn đã đăng ký qua mã giới thiệu. Cộng ${reward.refereeBonusTokens.toLocaleString("vi-VN")} token vào lifetime quota.`,
+        type: "success",
+        link: portalUrl,
+        channels: ["inapp"],
+        createdBy: "system",
+      }).catch(() => {});
+      sendReferralRewardEmail({
+        email: referee.email,
+        displayName: referee.displayName,
+        role: "referee",
+        refereeEmail: referee.email,
+        bonusTokens: reward.refereeBonusTokens,
+        portalUrl,
+      }).catch((e) => console.log("[referral] referee email failed:", e.message));
+      notifyCustomerCustom({
+        customer: referee,
+        title: "Bạn nhận thưởng giới thiệu",
+        body: `Cảm ơn bạn đã đăng ký qua mã giới thiệu. Cộng ${reward.refereeBonusTokens.toLocaleString("vi-VN")} token vào lifetime quota.`,
+        link: portalUrl,
+      }).catch((e) => console.log("[referral] referee telegram failed:", e.message));
+    }
+  } catch (e) {
+    console.log("[referral] dispatch failed:", e.message);
+  }
 }
 
 // Lightweight health-check for ops — `curl` against the webhook URL to make

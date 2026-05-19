@@ -8,13 +8,15 @@ import {
   getPricingPlanById,
 } from "@/lib/localDb";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
-import { sendKeyDeliveredEmail } from "@/lib/notify/email";
-import { notifyCustomerKeyDelivered, notifyAdminOrderConfirmed, resolvePublicUrl } from "@/lib/notify/telegram";
+import { sendKeyDeliveredEmail, sendReferralRewardEmail } from "@/lib/notify/email";
+import { notifyCustomerKeyDelivered, notifyAdminOrderConfirmed, notifyCustomerCustom, resolvePublicUrl } from "@/lib/notify/telegram";
 import { getClientIp } from "@/lib/auth/loginThrottle";
 import { cancelApibankOrder, getApibankOrder } from "@/lib/payments/apibank";
 import { requireRole } from "@/lib/auth/rbac";
 import { apiError } from "@/shared/utils/apiError";
 import { parseJsonBody, AdminOrderPatchSchema } from "@/lib/validation/schemas";
+import { grantReferralRewardOnFirstDelivered } from "@/lib/db/repos/referralsRepo";
+import { createNotification } from "@/lib/db/repos/notificationsRepo";
 
 export const dynamic = "force-dynamic";
 
@@ -78,6 +80,7 @@ export async function PATCH(request, { params }) {
             await notifyCustomerKeyDelivered({ customer, planName: plan?.name || "Plan", key: result.apiKey.key, keyDisplay: result.apiKey.keyDisplay, portalUrl });
           }
           await notifyAdminOrderConfirmed({ order: result.order, customer, planName: plan?.name });
+          await dispatchReferralRewards({ orderId: id });
         } catch (e) { console.log("[admin/orders] notify failed:", e.message); }
       })();
       return NextResponse.json(result);
@@ -142,6 +145,7 @@ export async function PATCH(request, { params }) {
             await notifyCustomerKeyDelivered({ customer, planName: plan?.name || "Plan", key: result.apiKey.key, keyDisplay: result.apiKey.keyDisplay, portalUrl });
           }
           await notifyAdminOrderConfirmed({ order: result.order, customer, planName: plan?.name });
+          await dispatchReferralRewards({ orderId: id });
         } catch (e) { console.log("[admin/orders] reconcile notify failed:", e.message); }
       })();
       return NextResponse.json({ ok: true, ...result, apibankStatus: ab.status });
@@ -153,5 +157,79 @@ export async function PATCH(request, { params }) {
     return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 });
   } catch (e) {
     return apiError(e, "Action failed", 400, "admin/orders");
+  }
+}
+
+/**
+ * Grant referral bonus + send notifications to both parties when an order's
+ * first delivery occurs. No-op when the order has no referrer or referral is
+ * disabled. Failures are swallowed; this should never break the confirm flow.
+ */
+async function dispatchReferralRewards({ orderId }) {
+  try {
+    const result = await grantReferralRewardOnFirstDelivered({ orderId });
+    if (!result?.granted) return;
+    const { reward, referrer, referee } = result;
+    const portalUrl = await resolvePublicUrl("/store/account/keys");
+
+    // In-app notifications.
+    if (reward.referrerBonusTokens > 0) {
+      await createNotification({
+        customerId: referrer.id,
+        title: "Bạn vừa nhận thưởng giới thiệu",
+        body: `Khách hàng ${referee.email} mà bạn giới thiệu vừa hoàn tất đơn đầu tiên. Bạn được cộng ${reward.referrerBonusTokens.toLocaleString("vi-VN")} token vào lifetime quota của API key.`,
+        type: "success",
+        link: portalUrl,
+        channels: ["inapp"],
+        createdBy: "system",
+      });
+    }
+    if (reward.refereeBonusTokens > 0) {
+      await createNotification({
+        customerId: referee.id,
+        title: "Bạn nhận thưởng từ chương trình giới thiệu",
+        body: `Cảm ơn bạn đã đăng ký qua mã giới thiệu. Bạn được cộng ${reward.refereeBonusTokens.toLocaleString("vi-VN")} token vào lifetime quota của API key.`,
+        type: "success",
+        link: portalUrl,
+        channels: ["inapp"],
+        createdBy: "system",
+      });
+    }
+
+    // Email + Telegram (best-effort, parallel-safe).
+    if (reward.referrerBonusTokens > 0) {
+      sendReferralRewardEmail({
+        email: referrer.email,
+        displayName: referrer.displayName,
+        role: "referrer",
+        refereeEmail: referee.email,
+        bonusTokens: reward.referrerBonusTokens,
+        portalUrl,
+      }).catch((e) => console.log("[referral] referrer email failed:", e.message));
+      notifyCustomerCustom({
+        customer: referrer,
+        title: "Bạn nhận thưởng giới thiệu",
+        body: `Khách ${referee.email} vừa hoàn tất đơn đầu. Cộng ${reward.referrerBonusTokens.toLocaleString("vi-VN")} token vào lifetime quota.`,
+        link: portalUrl,
+      }).catch((e) => console.log("[referral] referrer telegram failed:", e.message));
+    }
+    if (reward.refereeBonusTokens > 0) {
+      sendReferralRewardEmail({
+        email: referee.email,
+        displayName: referee.displayName,
+        role: "referee",
+        refereeEmail: referee.email,
+        bonusTokens: reward.refereeBonusTokens,
+        portalUrl,
+      }).catch((e) => console.log("[referral] referee email failed:", e.message));
+      notifyCustomerCustom({
+        customer: referee,
+        title: "Bạn nhận thưởng giới thiệu",
+        body: `Cảm ơn bạn đã đăng ký qua mã giới thiệu. Cộng ${reward.refereeBonusTokens.toLocaleString("vi-VN")} token vào lifetime quota.`,
+        link: portalUrl,
+      }).catch((e) => console.log("[referral] referee telegram failed:", e.message));
+    }
+  } catch (e) {
+    console.log("[referral] dispatch failed:", e.message);
   }
 }

@@ -8,7 +8,8 @@ function RegisterForm() {
   const router = useRouter();
   const params = useSearchParams();
   const next = params.get("next") || "/store/account";
-  const [form, setForm] = useState({ email: "", password: "", confirmPassword: "", displayName: "", telegramChatId: "" });
+  const initialRef = (params.get("ref") || "").trim().toUpperCase();
+  const [form, setForm] = useState({ email: "", password: "", confirmPassword: "", displayName: "", telegramChatId: "", referralCode: initialRef });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -84,6 +85,16 @@ function RegisterForm() {
             value={form.telegramChatId} onChange={(e) => set("telegramChatId", e.target.value)}
             placeholder="vd: 123456789"
             className="rounded-lg border border-border bg-bg px-3 py-2 focus:outline-none focus:border-primary"
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-text-muted">Mã giới thiệu <span className="text-xs">(tùy chọn — nhận token thưởng cho cả hai khi mua đơn đầu)</span></span>
+          <input
+            type="text"
+            value={form.referralCode}
+            onChange={(e) => set("referralCode", e.target.value.toUpperCase())}
+            placeholder="vd: ABCD1234"
+            className="rounded-lg border border-border bg-bg px-3 py-2 font-mono uppercase focus:outline-none focus:border-primary"
           />
         </label>
         <a href={`/api/account/google/start?next=${encodeURIComponent(next)}`} className="rounded-lg border border-border px-4 py-2.5 text-center text-sm font-medium hover:border-primary hover:text-primary">
