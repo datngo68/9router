@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { NextResponse } from "next/server";
 import { getSettings } from "@/lib/localDb";
+import { sanitizeNextPath } from "@/shared/utils/safeNext";
 
 export const dynamic = "force-dynamic";
 
@@ -24,19 +25,23 @@ export async function GET(request) {
   }
 
   const url = new URL(request.url);
-  const next = url.searchParams.get("next") || "/store/account";
+  const next = sanitizeNextPath(url.searchParams.get("next"));
   const state = crypto.randomBytes(24).toString("hex");
+  const nonce = crypto.randomBytes(32).toString("hex");
   const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   authUrl.searchParams.set("client_id", settings.customerGoogleClientId);
   authUrl.searchParams.set("redirect_uri", callbackUrl(request, settings));
   authUrl.searchParams.set("response_type", "code");
   authUrl.searchParams.set("scope", "openid email profile");
   authUrl.searchParams.set("state", state);
+  authUrl.searchParams.set("nonce", nonce);
   authUrl.searchParams.set("prompt", "select_account");
 
   const res = NextResponse.redirect(authUrl);
   const secure = request.headers.get("x-forwarded-proto") === "https" || new URL(request.url).protocol === "https:";
-  res.cookies.set("customer_google_oauth_state", state, { httpOnly: true, sameSite: "lax", secure, path: "/", maxAge: 600 });
-  res.cookies.set("customer_google_oauth_next", next, { httpOnly: true, sameSite: "lax", secure, path: "/", maxAge: 600 });
+  const cookieOpts = { httpOnly: true, sameSite: "lax", secure, path: "/", maxAge: 600 };
+  res.cookies.set("customer_google_oauth_state", state, cookieOpts);
+  res.cookies.set("customer_google_oauth_nonce", nonce, cookieOpts);
+  res.cookies.set("customer_google_oauth_next", next, cookieOpts);
   return res;
 }

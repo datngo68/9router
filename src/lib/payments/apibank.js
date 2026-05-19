@@ -17,6 +17,7 @@
 
 import crypto from "node:crypto";
 import { getSettings } from "@/lib/db/repos/settingsRepo.js";
+import { safeFetch, SsrfBlockedError } from "@/shared/net/safeFetch";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const SIGNATURE_TOLERANCE_SEC = 300;
@@ -51,7 +52,7 @@ async function apibankFetch(method, path, { baseUrl, apiKey, body, idempotencyKe
   const timer = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
   let res;
   try {
-    res = await fetch(url, {
+    res = await safeFetch(url, {
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -62,6 +63,9 @@ async function apibankFetch(method, path, { baseUrl, apiKey, body, idempotencyKe
   } catch (e) {
     clearTimeout(timer);
     if (e?.name === "AbortError") throw new Error("APIBank timeout (10s)");
+    if (e instanceof SsrfBlockedError) {
+      throw new Error(`APIBank URL bị từ chối (SSRF policy): ${e.reason || e.message}`);
+    }
     throw new Error(`APIBank network error: ${e.message}`);
   }
   clearTimeout(timer);

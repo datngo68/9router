@@ -1,21 +1,27 @@
 import { NextResponse } from "next/server";
 import { getPricingPlans, createPricingPlan } from "@/lib/localDb";
+import { requireRole } from "@/lib/auth/rbac";
+import { parseJsonBody, AdminPricingPlanSchema } from "@/lib/validation/schemas";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request) {
+  const auth = await requireRole(request, "operator");
+  if (auth.response) return auth.response;
   const plans = await getPricingPlans();
   return NextResponse.json({ plans });
 }
 
 export async function POST(request) {
-  let body;
-  try { body = await request.json(); }
-  catch { return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 }); }
+  const auth = await requireRole(request, "admin", { action: "pricing_plan.create", targetType: "pricingPlan" });
+  if (auth.response) return auth.response;
+  const parsed = await parseJsonBody(request, AdminPricingPlanSchema);
+  if (parsed.response) return parsed.response;
   try {
-    const plan = await createPricingPlan(body || {});
+    const plan = await createPricingPlan(parsed.value);
     return NextResponse.json({ plan }, { status: 201 });
   } catch (e) {
-    return NextResponse.json({ error: e.message || "Create failed" }, { status: 400 });
+    console.error("[admin/pricing-plans] create failed:", e?.message || e);
+    return NextResponse.json({ error: "Create failed" }, { status: 400 });
   }
 }

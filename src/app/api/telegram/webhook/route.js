@@ -13,6 +13,7 @@ import { sendTelegramMessage, tgEditMessage, tgAnswerCallback, resolvePublicUrl 
 import { getConsistentMachineId } from "@/shared/utils/machineId";
 import { sendKeyDeliveredEmail } from "@/lib/notify/email";
 import { notifyCustomerKeyDelivered } from "@/lib/notify/telegram";
+import { safeEqual } from "@/shared/utils/safeCompare";
 
 export const dynamic = "force-dynamic";
 
@@ -111,7 +112,7 @@ export async function POST(request) {
     return NextResponse.json({ ok: false, error: "webhook not configured" }, { status: 503 });
   }
   const provided = request.headers.get("x-telegram-bot-api-secret-token") || new URL(request.url).searchParams.get("secret");
-  if (provided !== settings.telegramWebhookSecret) {
+  if (!safeEqual(provided || "", settings.telegramWebhookSecret)) {
     console.log("[tg-webhook] secret mismatch", {
       hasHeader: !!request.headers.get("x-telegram-bot-api-secret-token"),
       hasQuery: !!new URL(request.url).searchParams.get("secret"),

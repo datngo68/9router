@@ -40,7 +40,10 @@ export function shouldUseSecureCookie(request) {
 
 export async function createDashboardAuthToken(claims = {}) {
   const v = await currentTokenVersion();
-  return new SignJWT({ authenticated: true, v, ...claims })
+  // Default role: "admin" — the dashboard token currently represents a single
+  // admin operator. The role claim is here so future code paths can require
+  // specific roles without forcing a token-version bump.
+  return new SignJWT({ authenticated: true, v, role: "admin", ...claims })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime("24h")

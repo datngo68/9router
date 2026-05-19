@@ -30,6 +30,7 @@ export default function AdminCustomerDetailPage() {
   const [savedMsg, setSavedMsg] = useState("");
   const [confirm, setConfirm] = useState(null);
   const [quotaModal, setQuotaModal] = useState(null);
+  const [compressModal, setCompressModal] = useState(null);
   const [toast, setToast] = useState("");
 
   async function load() {
@@ -68,7 +69,6 @@ export default function AdminCustomerDetailPage() {
   if (data.error) return <Card><p className="text-red-500">{data.error}</p></Card>;
 
   const { customer, orders, keys, summary, usageDaily, usageByModel, keyLimitsUsage, voucherRedemptions } = data;
-
   return (
     <div className="flex flex-col gap-6">
       <div>
@@ -115,6 +115,7 @@ export default function AdminCustomerDetailPage() {
           keys={keys}
           onToggle={toggleKey}
           onOpenQuota={(k) => setQuotaModal({ key: k, mode: "add", dailyTokenLimit: 0, monthlyTokenLimit: 0, lifetimeTokenLimit: 0, extendDays: 0 })}
+          onOpenCompress={(k) => setCompressModal({ key: k })}
         />
       )}
       {tab === "actions" && (
@@ -140,6 +141,23 @@ export default function AdminCustomerDetailPage() {
           if (!res.ok) { notify(d?.error || "Lỗi cập nhật quota"); return; }
           setQuotaModal(null);
           notify("Đã cập nhật quota.");
+          load();
+        }}
+      />
+
+      <CompressModal
+        modal={compressModal}
+        onClose={() => setCompressModal(null)}
+        onSave={async (payload) => {
+          const res = await fetch(`/api/admin/api-keys/${compressModal.key.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          const d = await res.json().catch(() => ({}));
+          if (!res.ok) { notify(d?.error || "Lỗi cập nhật compress"); return; }
+          setCompressModal(null);
+          notify("Đã cập nhật compress.");
           load();
         }}
       />
@@ -398,7 +416,7 @@ function VoucherTab({ redemptions }) {
   );
 }
 
-function KeysTab({ keys, onToggle, onOpenQuota }) {
+function KeysTab({ keys, onToggle, onOpenQuota, onOpenCompress }) {
   return (
     <Card>
       <h2 className="font-semibold mb-3">API Keys ({keys.length})</h2>
@@ -413,6 +431,8 @@ function KeysTab({ keys, onToggle, onOpenQuota }) {
                 <th className="px-3 py-2 text-right">Monthly</th>
                 <th className="px-3 py-2 text-right">Lifetime</th>
                 <th className="px-3 py-2 text-left">Hết hạn</th>
+                <th className="px-3 py-2 text-center">RTK</th>
+                <th className="px-3 py-2 text-center">Caveman</th>
                 <th className="px-3 py-2 text-center">Active</th>
                 <th className="px-3 py-2"></th>
               </tr>
@@ -426,10 +446,13 @@ function KeysTab({ keys, onToggle, onOpenQuota }) {
                   <td className="px-3 py-2 text-right text-xs">{k.monthlyTokenLimit ? fmtNum(k.monthlyTokenLimit) : "∞"}</td>
                   <td className="px-3 py-2 text-right text-xs">{k.lifetimeTokenLimit ? fmtNum(k.lifetimeTokenLimit) : "∞"}</td>
                   <td className="px-3 py-2 text-xs text-text-muted">{fmtTime(k.expiresAt)}</td>
+                  <td className="px-3 py-2 text-center"><CompressBadge value={k.rtkMode} kind="rtk" /></td>
+                  <td className="px-3 py-2 text-center"><CompressBadge value={k.cavemanMode} kind="caveman" /></td>
                   <td className="px-3 py-2 text-center">
                     <Toggle checked={k.isActive} onChange={() => onToggle(k.id)} size="sm" />
                   </td>
-                  <td className="px-3 py-2 text-right">
+                  <td className="px-3 py-2 text-right whitespace-nowrap">
+                    <Button onClick={() => onOpenCompress(k)} size="sm" variant="ghost">Compress</Button>
                     <Button onClick={() => onOpenQuota(k)} size="sm" variant="ghost">Quota / gia hạn</Button>
                   </td>
                 </tr>
@@ -440,6 +463,17 @@ function KeysTab({ keys, onToggle, onOpenQuota }) {
       )}
     </Card>
   );
+}
+
+function CompressBadge({ value, kind }) {
+  const v = value || "inherit";
+  const palette =
+    v === "inherit" ? "bg-text-muted/15 text-text-muted"
+      : v === "off" ? "bg-text-muted/15 text-text-muted"
+      : v === "on" ? "bg-emerald-500/15 text-emerald-500"
+      : kind === "caveman" ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+      : "bg-primary/15 text-primary";
+  return <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] uppercase ${palette}`}>{v}</span>;
 }
 
 function ActionsTab({ onResetPassword }) {
@@ -508,6 +542,63 @@ function QuotaModal({ modal, onClose, onSave }) {
 
         <div className="flex gap-2">
           <Button onClick={submit} fullWidth>Áp dụng</Button>
+          <Button onClick={onClose} variant="ghost" fullWidth>Hủy</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+const RTK_MODES = [
+  { id: "inherit", label: "Inherit" },
+  { id: "on", label: "On" },
+  { id: "off", label: "Off" },
+];
+
+const CAVEMAN_MODES = [
+  { id: "inherit", label: "Inherit" },
+  { id: "off", label: "Off" },
+  { id: "lite", label: "Lite" },
+  { id: "full", label: "Full" },
+  { id: "ultra", label: "Ultra" },
+];
+
+function CompressModal({ modal, onClose, onSave }) {
+  const [rtkMode, setRtkMode] = useState("inherit");
+  const [cavemanMode, setCavemanMode] = useState("inherit");
+
+  useEffect(() => {
+    if (!modal) return;
+    setRtkMode(modal.key?.rtkMode || "inherit");
+    setCavemanMode(modal.key?.cavemanMode || "inherit");
+  }, [modal]);
+
+  if (!modal) return null;
+  const k = modal.key;
+
+  return (
+    <Modal isOpen={!!modal} onClose={onClose} title={`Compress: ${k.name || k.keyDisplay}`}>
+      <div className="flex flex-col gap-4">
+        <p className="text-xs text-text-muted">
+          <strong>Inherit</strong>: dùng setting global. <strong>RTK</strong> nén tool_result, <strong>Caveman</strong> chèn system prompt nén theo level.
+        </p>
+
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-text-muted">RTK mode</span>
+          <select value={rtkMode} onChange={(e) => setRtkMode(e.target.value)} className="rounded-lg border border-border bg-bg px-3 py-2">
+            {RTK_MODES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+          </select>
+        </label>
+
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-text-muted">Caveman mode</span>
+          <select value={cavemanMode} onChange={(e) => setCavemanMode(e.target.value)} className="rounded-lg border border-border bg-bg px-3 py-2">
+            {CAVEMAN_MODES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+          </select>
+        </label>
+
+        <div className="flex gap-2">
+          <Button onClick={() => onSave({ rtkMode, cavemanMode })} fullWidth>Áp dụng</Button>
           <Button onClick={onClose} variant="ghost" fullWidth>Hủy</Button>
         </div>
       </div>

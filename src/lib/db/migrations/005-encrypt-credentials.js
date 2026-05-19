@@ -55,6 +55,11 @@ function loadKey() {
   fs.mkdirSync(dataDir, { recursive: true });
   const generated = crypto.randomBytes(32);
   fs.writeFileSync(file, generated.toString("hex"), { mode: 0o600 });
+  console.warn(
+    `\n[migration:005] secret-key auto-generated at ${file}.\n` +
+    "  Back this file up alongside your DB — losing it makes encrypted credentials unrecoverable.\n" +
+    "  For multi-host deploys, set SECRET_KEY env to a 32-byte hex/base64url value instead.\n"
+  );
   return generated;
 }
 

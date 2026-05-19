@@ -30,6 +30,7 @@ export {
 // API keys
 export {
   getApiKeys, getApiKeyById, getApiKeyByKey, getApiKeysByCustomer, createApiKey, updateApiKey, deleteApiKey, validateApiKey,
+  listAllApiKeys, bulkUpdateApiKeys, bulkUpdateApiKeysWith, bulkDeleteApiKeys,
 } from "./repos/apiKeysRepo.js";
 
 // API key audit log

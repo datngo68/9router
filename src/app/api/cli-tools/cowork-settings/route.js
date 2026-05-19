@@ -8,18 +8,10 @@ import crypto from "crypto";
 import { DEFAULT_PLUGINS, LOCAL_STDIO_PLUGINS, ALLOWED_MCP_COMMANDS, buildManagedMcpServers } from "@/shared/constants/coworkPlugins";
 import { UPDATER_CONFIG } from "@/shared/constants/config";
 import { DATA_DIR } from "@/lib/dataDir";
-import { getConsistentMachineId } from "@/shared/utils/machineId";
+import { CLI_TOKEN_HEADER, getCliToken } from "@/lib/auth/cliToken";
 
 const APP_PORT = UPDATER_CONFIG.appPort;
-const CLI_TOKEN_HEADER = "x-9r-cli-token";
-const CLI_TOKEN_SALT = "9r-cli-auth";
 const LOCAL_MCP_PREFIX = `http://localhost:${APP_PORT}/api/mcp/`;
-
-let cachedCliToken = null;
-const getCliToken = async () => {
-  if (!cachedCliToken) cachedCliToken = await getConsistentMachineId(CLI_TOKEN_SALT);
-  return cachedCliToken;
-};
 
 // Inject CLI token header into entries pointing at our local /api/mcp/ bridge.
 const injectAuthHeaders = async (entries) => {

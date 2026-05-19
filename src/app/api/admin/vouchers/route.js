@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getVouchers, createVoucher } from "@/lib/localDb";
+import { apiError } from "@/shared/utils/apiError";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +17,6 @@ export async function POST(request) {
     const voucher = await createVoucher(body || {});
     return NextResponse.json({ voucher }, { status: 201 });
   } catch (e) {
-    return NextResponse.json({ error: e.message || "Create failed" }, { status: 400 });
+    return apiError(e, "Create failed", 400, "admin/vouchers");
   }
 }

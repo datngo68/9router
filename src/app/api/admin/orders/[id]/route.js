@@ -12,11 +12,16 @@ import { sendKeyDeliveredEmail } from "@/lib/notify/email";
 import { notifyCustomerKeyDelivered, notifyAdminOrderConfirmed, resolvePublicUrl } from "@/lib/notify/telegram";
 import { getClientIp } from "@/lib/auth/loginThrottle";
 import { cancelApibankOrder, getApibankOrder } from "@/lib/payments/apibank";
+import { requireRole } from "@/lib/auth/rbac";
+import { apiError } from "@/shared/utils/apiError";
+import { parseJsonBody, AdminOrderPatchSchema } from "@/lib/validation/schemas";
 
 export const dynamic = "force-dynamic";
 
 // GET /api/admin/orders/[id]
-export async function GET(_request, { params }) {
+export async function GET(request, { params }) {
+  const auth = await requireRole(request, "operator");
+  if (auth.response) return auth.response;
   const { id } = await params;
   const order = await getOrderById(id);
   if (!order) return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -28,14 +33,19 @@ export async function GET(_request, { params }) {
 }
 
 // PATCH /api/admin/orders/[id] — admin actions
-//   body: { action: "confirm" | "cancel" | "refund", paymentRef?, notes? }
+//   body: { action: "confirm" | "cancel" | "refund" | "apibank-reconcile", paymentRef?, notes? }
 export async function PATCH(request, { params }) {
   const { id } = await params;
-  let body;
-  try { body = await request.json(); }
-  catch { return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 }); }
-
-  const action = body?.action;
+  const parsed = await parseJsonBody(request, AdminOrderPatchSchema);
+  if (parsed.response) return parsed.response;
+  const body = parsed.value;
+  const action = body.action;
+  const auth = await requireRole(request, "admin", {
+    action: `order.${action}`,
+    targetType: "order",
+    targetId: id,
+  });
+  if (auth.response) return auth.response;
   const order = await getOrderById(id);
   if (!order) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
@@ -142,6 +152,6 @@ export async function PATCH(request, { params }) {
     }
     return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 });
   } catch (e) {
-    return NextResponse.json({ error: e.message || "Action failed" }, { status: 400 });
+    return apiError(e, "Action failed", 400, "admin/orders");
   }
 }

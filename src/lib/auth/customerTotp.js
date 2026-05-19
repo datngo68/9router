@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { safeEqual } from "@/shared/utils/safeCompare";
 
 const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 
@@ -58,7 +59,8 @@ export function verifyTotpCode(secret, code, { now = Date.now(), window = 1 } = 
   if (!/^\d{6}$/.test(normalized) || !secret) return false;
   const step = Math.floor(now / 30000);
   for (let drift = -window; drift <= window; drift += 1) {
-    if (hotp(secret, step + drift) === normalized) return true;
+    // Constant-time compare to avoid leaking the expected digits via timing.
+    if (safeEqual(hotp(secret, step + drift), normalized)) return true;
   }
   return false;
 }

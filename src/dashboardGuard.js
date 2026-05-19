@@ -1,22 +1,43 @@
+/**
+ * This module is invoked from src/proxy.js as Next.js proxy (renamed from
+ * middleware in Next.js 16). Edit src/proxy.js to change the matcher; do not
+ * call this from app code directly.
+ */
 import { NextResponse } from "next/server";
 import crypto from "node:crypto";
-import { getSettings } from "@/lib/localDb";
-import { getConsistentMachineId } from "@/shared/utils/machineId";
+import fs from "node:fs";
+import path from "node:path";
+import { getSettings, validateApiKey } from "@/lib/localDb";
+import { DATA_DIR } from "@/lib/dataDir";
 import { verifyDashboardAuthToken } from "@/lib/auth/dashboardSession";
+import { safeEqual } from "@/shared/utils/safeCompare";
 
 const CLI_TOKEN_HEADER = "x-9r-cli-token";
-const CLI_TOKEN_SALT = "9r-cli-auth";
+const CLI_TOKEN_FILE = path.join(DATA_DIR, "cli-token");
 
 let cachedCliToken = null;
 async function getCliToken() {
-  if (!cachedCliToken) cachedCliToken = await getConsistentMachineId(CLI_TOKEN_SALT);
+  if (cachedCliToken) return cachedCliToken;
+  try {
+    const raw = fs.readFileSync(CLI_TOKEN_FILE, "utf8").trim();
+    if (raw) {
+      cachedCliToken = raw;
+      return cachedCliToken;
+    }
+  } catch {}
+  // Lazy-create here too so guard works on first hit before any other module touches it.
+  cachedCliToken = crypto.randomBytes(32).toString("hex");
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(CLI_TOKEN_FILE, cachedCliToken, { mode: 0o600 });
+  } catch {}
   return cachedCliToken;
 }
 
 async function hasValidCliToken(request) {
   const token = request.headers.get(CLI_TOKEN_HEADER);
   if (!token) return false;
-  return token === await getCliToken();
+  return safeEqual(token, await getCliToken());
 }
 
 // Public API paths — no auth required (LLM API has its own key auth inside handler).
@@ -44,9 +65,17 @@ const PUBLIC_API_PATHS = [
   "/api/webhooks/apibank",
 ];
 
-// Public top-level prefixes (LLM API endpoints with their own API key auth,
-// plus the storefront site for unauthenticated browsing).
-const PUBLIC_PREFIXES = ["/v1", "/v1beta", "/store"];
+// Public top-level prefixes for LLM API endpoints with their own API key auth.
+// `/api/v1` and `/api/v1beta` are also exposed because Next.js rewrites in
+// next.config.mjs route `/v1/...` → `/api/v1/...`; some clients hit the
+// canonical path directly. Both forms must be in the list so the LLM API gate
+// is consistent.
+//
+// NOTE: `/store` is the storefront frontend page, NOT an API. It must not be
+// in this list — otherwise remote browser visits to /store would be 401'd as
+// "API key required". The storefront is implicitly public via the catch-all
+// at the bottom of `proxy()`.
+const PUBLIC_PREFIXES = ["/v1", "/v1beta", "/api/v1", "/api/v1beta"];
 
 // Always require JWT token regardless of requireLogin setting
 const ALWAYS_PROTECTED = [
@@ -58,10 +87,12 @@ const ALWAYS_PROTECTED = [
   "/api/oauth/kiro/auto-import",
 ];
 
-// Routes that spawn child processes or read host secrets — restrict to localhost.
+// Routes that spawn child processes, read host secrets, or write to the
+// operator's home directory — restrict to localhost. cli-tools/* in particular
+// writes config files into ~/.<app> with values from request body, so we want
+// them gated even though they look harmless in isolation.
 const LOCAL_ONLY_PATHS = [
-  "/api/cli-tools/cowork-settings",
-  "/api/cli-tools/antigravity-mitm",
+  "/api/cli-tools/",
   "/api/mcp/",
   "/api/tunnel/tailscale-install",
   "/api/tunnel/tailscale-enable",
@@ -83,7 +114,38 @@ function isLoopbackHostname(h) {
   return LOOPBACK_HOSTS.has(name);
 }
 
+/**
+ * Resolve the "effective" request host the BROWSER thinks it's talking to.
+ *
+ * Cloudflared (with `--url http://127.0.0.1:20128`) and most reverse proxies
+ * rewrite the `Host` header to the local origin before forwarding, while
+ * preserving the original public hostname in `x-forwarded-host`. The raw
+ * `Host` header alone is therefore unsafe to use for CSRF / admin-host gating
+ * because:
+ *   - same-origin POSTs from a tunnel look "cross-origin" (Host=127.0.0.1
+ *     vs Origin=https://example.com) → 403,
+ *   - external requests can look "loopback" (Host=127.0.0.1) and silently
+ *     bypass loopback-only checks.
+ *
+ * Prefer `x-forwarded-host` when present (proxy hop is trusted because we
+ * only use it for matching, never for authorisation by itself), fall back
+ * to raw `Host`.
+ */
+function getEffectiveHost(request) {
+  const fwd = request.headers.get("x-forwarded-host");
+  if (fwd) {
+    const first = String(fwd).split(",")[0].trim().toLowerCase();
+    if (first) return first;
+  }
+  return (request.headers.get("host") || "").toLowerCase();
+}
+
 function isLocalRequest(request) {
+  // Reject if any reverse-proxy header is present — request originated
+  // remotely even if the rewritten Host happens to look loopback.
+  if (request.headers.get("x-forwarded-host")) return false;
+  if (request.headers.get("x-forwarded-for")) return false;
+  if (request.headers.get("x-real-ip")) return false;
   if (!isLoopbackHostname(request.headers.get("host"))) return false;
   const origin = request.headers.get("origin");
   if (origin) {
@@ -92,6 +154,46 @@ function isLocalRequest(request) {
     } catch { return false; }
   }
   return true;
+}
+
+// Origin/Referer guard for mutating requests.
+//
+// Adds a coarse anti-CSRF layer at the proxy. For unsafe methods on the API
+// surface, require either:
+//   - Origin header whose host matches Host (same-origin), OR
+//   - Referer header whose host matches Host, OR
+//   - x-9r-cli-token (CLI clients have no browser-managed cookie at all), OR
+//   - the request is loopback (admin running locally without a proxy).
+// Routes that purposely accept third-party POSTs (Telegram/APIBank webhooks,
+// OIDC callback) are exempted via CSRF_EXEMPT_PATHS.
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+const CSRF_EXEMPT_PATHS = [
+  "/api/telegram/webhook",
+  "/api/webhooks/apibank",
+  "/api/auth/oidc",
+  "/api/account/google",
+];
+
+function originHost(value) {
+  if (!value) return "";
+  try {
+    const u = new URL(value);
+    return u.host.toLowerCase();
+  } catch { return ""; }
+}
+
+function passesOriginCheck(request) {
+  const host = getEffectiveHost(request);
+  if (!host) return false;
+  const origin = request.headers.get("origin");
+  if (origin) return originHost(origin) === host;
+  const referer = request.headers.get("referer");
+  if (referer) return originHost(referer) === host;
+  // No Origin/Referer at all: typical of `fetch` calls that strip them or
+  // raw curl from CLI. Accept only if a CLI token is present (checked
+  // separately in the caller) — here we say "no opinion" by returning false
+  // and the proxy falls back to other gates.
+  return false;
 }
 
 function isPublicLlmApi(pathname) {
@@ -148,6 +250,15 @@ function isPublicApi(pathname) {
   return PUBLIC_API_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 }
 
+export const __test__ = {
+  isLocalRequest,
+  isPublicLlmApi,
+  extractApiKey,
+  canAccessPublicLlmApi,
+  canAccessLocalOnlyRoute,
+  getEffectiveHost,
+};
+
 const ADMIN_ENDPOINTS = ["/dashboard", "/login", "/api/admin"];
 
 /**
@@ -172,7 +283,7 @@ function normalizeHostInput(raw) {
 
 function isAdminHostAllowed(request, settings) {
   if (!settings) return true;
-  const host = (request.headers.get("host") || "").split(":")[0].toLowerCase();
+  const host = getEffectiveHost(request).split(":")[0];
   if (isLoopbackHostname(host)) return true;
   const raw = settings.adminHosts;
   if (!raw || !String(raw).trim()) return true; // not configured → no restriction
@@ -217,7 +328,7 @@ function gateCookieValue(prefix) {
 function hasValidGateCookie(request, prefix) {
   if (!prefix) return false;
   const cookie = request.cookies.get(ADMIN_GATE_COOKIE)?.value;
-  return cookie && cookie === gateCookieValue(prefix);
+  return !!cookie && safeEqual(cookie, gateCookieValue(prefix));
 }
 
 export async function proxy(request) {
@@ -252,7 +363,7 @@ export async function proxy(request) {
   //   - Visit /login       → 404 unless gate cookie OR auth_token present
   // Result: bots scanning /login from outside hit 404 unless they know the
   // prefix; humans typing /<prefix> get redirected and can sign in normally.
-  if (adminPrefix && !isLoopbackHostname((request.headers.get("host") || "").split(":")[0])) {
+  if (adminPrefix && !isLoopbackHostname(getEffectiveHost(request).split(":")[0])) {
     const root = `/${adminPrefix}`;
     if (pathname === root || pathname === `${root}/` || pathname === `${root}/login`) {
       const res = NextResponse.redirect(new URL("/login", request.url));
@@ -288,6 +399,23 @@ export async function proxy(request) {
 
   // Deny-by-default for /api/* — public allow-list bypasses, everything else requires auth.
   if (pathname.startsWith("/api/")) {
+    // CSRF: enforce same-origin for unsafe methods on /api/*. Webhooks and
+    // OAuth/OIDC callbacks are exempt — they are designed to receive POSTs
+    // from third parties and verify their own signatures.
+    if (!SAFE_METHODS.has(String(request.method || "GET").toUpperCase())) {
+      const exempt = CSRF_EXEMPT_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+      if (!exempt) {
+        const cliOk = await hasValidCliToken(request);
+        // Public LLM API uses Bearer apiKey auth and is called server-to-server,
+        // skip CSRF check (Origin will normally be absent there).
+        if (!isPublicLlmApi(pathname) && !cliOk) {
+          if (!passesOriginCheck(request) && !isLocalRequest(request)) {
+            return NextResponse.json({ error: "CSRF check failed: missing or cross-origin Origin/Referer" }, { status: 403 });
+          }
+        }
+      }
+    }
+
     if (isPublicApi(pathname)) return NextResponse.next();
     // Customer routes verify session in-handler — bypass admin auth.
     if (pathname.startsWith("/api/account/") || pathname === "/api/account") return NextResponse.next();
@@ -310,7 +438,7 @@ export async function proxy(request) {
 
         // Block tunnel/tailscale access if disabled (redirect to login)
         if (!tunnelDashboardAccess) {
-          const host = (request.headers.get("host") || "").split(":")[0].toLowerCase();
+          const host = getEffectiveHost(request).split(":")[0];
           const tunnelHost = settings.tunnelUrl ? new URL(settings.tunnelUrl).hostname.toLowerCase() : "";
           const tailscaleHost = settings.tailscaleUrl ? new URL(settings.tailscaleUrl).hostname.toLowerCase() : "";
           if ((tunnelHost && host === tunnelHost) || (tailscaleHost && host === tailscaleHost)) {
@@ -350,7 +478,7 @@ export async function proxy(request) {
   if (pathname === "/") {
     const adminHostsConfigured = settings?.adminHosts && String(settings.adminHosts).trim();
     const onAdminHost = isAdminHostAllowed(request, settings) && (
-      adminHostsConfigured || isLoopbackHostname((request.headers.get("host") || "").split(":")[0])
+      adminHostsConfigured || isLoopbackHostname(getEffectiveHost(request).split(":")[0])
     );
 
     if (!onAdminHost) {

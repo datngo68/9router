@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCustomerById, getApiKeyById, updateApiKey } from "@/lib/localDb";
+import { requireRole } from "@/lib/auth/rbac";
 
 export const dynamic = "force-dynamic";
 
@@ -8,6 +9,8 @@ export const dynamic = "force-dynamic";
 //   hoặc bỏ trống để toggle dựa trên trạng thái hiện tại.
 export async function POST(request, { params }) {
   const { id, keyId } = await params;
+  const auth = await requireRole(request, "admin", { action: "apikey.toggle", targetType: "apiKey", targetId: keyId });
+  if (auth.response) return auth.response;
   const customer = await getCustomerById(id);
   if (!customer) return NextResponse.json({ error: "Customer not found" }, { status: 404 });
 

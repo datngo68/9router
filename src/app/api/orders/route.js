@@ -6,6 +6,7 @@ import { notifyAdminOrderCreated } from "@/lib/notify/telegram";
 import { sendOrderCreatedEmail } from "@/lib/notify/email";
 import { getSettings } from "@/lib/localDb";
 import { createApibankOrder } from "@/lib/payments/apibank";
+import { apiError } from "@/shared/utils/apiError";
 
 export const dynamic = "force-dynamic";
 
@@ -46,7 +47,7 @@ export async function POST(request) {
     order = await createOrder({ customerId: session.customer.id, planId, paymentMethod, notes, voucherCode });
   } catch (e) {
     recordFailure(`orderCreate:${ip}`);
-    return NextResponse.json({ error: e.message || "Tạo đơn thất bại" }, { status: 400 });
+    return apiError(e, "Tạo đơn thất bại", 400, "orders/create");
   }
 
   // If APIBank automation is enabled, create a parallel APIBank order so the

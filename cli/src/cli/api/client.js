@@ -4,7 +4,6 @@ const crypto = require("crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
-const { machineIdSync } = require("node-machine-id");
 
 // Default configuration
 const DEFAULT_CONFIG = {
@@ -14,7 +13,6 @@ const DEFAULT_CONFIG = {
 };
 
 const CLI_TOKEN_HEADER = "x-9r-cli-token";
-const CLI_TOKEN_SALT = "9r-cli-auth";
 const APP_NAME = "9router";
 
 function getDataDir() {
@@ -25,25 +23,32 @@ function getDataDir() {
   return path.join(os.homedir(), `.${APP_NAME}`);
 }
 
-const MACHINE_ID_FILE = path.join(getDataDir(), "machine-id");
+const CLI_TOKEN_FILE = path.join(getDataDir(), "cli-token");
 
 let config = { ...DEFAULT_CONFIG };
 let cachedCliToken = null;
 
-// Read raw machineId from shared file (written by server) → guarantees token match
-function loadRawMachineId() {
-  try {
-    const raw = fs.readFileSync(MACHINE_ID_FILE, "utf8").trim();
-    if (raw) return raw;
-  } catch {}
-  try { return machineIdSync(); } catch { return ""; }
-}
-
+// Read the persisted CLI token written by the dashboard.
+// If the file isn't present yet (server has never been started), generate one
+// and persist it so the dashboard picks it up on next start.
 function getCliToken() {
   if (cachedCliToken !== null) return cachedCliToken;
-  const raw = loadRawMachineId();
-  cachedCliToken = raw ? crypto.createHash("sha256").update(raw + CLI_TOKEN_SALT).digest("hex").substring(0, 16) : "";
-  return cachedCliToken;
+  try {
+    const raw = fs.readFileSync(CLI_TOKEN_FILE, "utf8").trim();
+    if (raw) {
+      cachedCliToken = raw;
+      return cachedCliToken;
+    }
+  } catch {}
+  try {
+    cachedCliToken = crypto.randomBytes(32).toString("hex");
+    fs.mkdirSync(getDataDir(), { recursive: true });
+    fs.writeFileSync(CLI_TOKEN_FILE, cachedCliToken, { mode: 0o600 });
+    return cachedCliToken;
+  } catch {
+    cachedCliToken = "";
+    return cachedCliToken;
+  }
 }
 
 /**

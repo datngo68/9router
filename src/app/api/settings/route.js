@@ -3,6 +3,8 @@ import { getSettings, updateSettings } from "@/lib/localDb";
 import { applyOutboundProxyEnv } from "@/lib/network/outboundProxy";
 import { resetComboRotation } from "open-sse/services/combo.js";
 import { validateSettingsPatch } from "@/lib/security/tunnelGuard";
+import { apiError } from "@/shared/utils/apiError";
+import { normalizeAllowedOrigin } from "@/sse/utils/cors";
 import bcrypt from "bcryptjs";
 
 export const dynamic = "force-dynamic";
@@ -35,8 +37,7 @@ export async function GET() {
       hasPassword: !!password
     }, { headers: SETTINGS_RESPONSE_HEADERS });
   } catch (error) {
-    console.log("Error getting settings:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return apiError(error, "Failed to load settings", 500, "settings/get");
   }
 }
 
@@ -114,6 +115,30 @@ export async function PATCH(request) {
       }
     }
 
+    // Validate corsAllowedOrigins format. Each entry must be `*` or
+    // `http(s)://host(:port)` — reject the patch on the first malformed
+    // item rather than silently dropping it, so admin sees the typo.
+    if (Object.prototype.hasOwnProperty.call(body, "corsAllowedOrigins")) {
+      const raw = body.corsAllowedOrigins;
+      const items = Array.isArray(raw)
+        ? raw
+        : (typeof raw === "string" ? raw.split(",") : []);
+      const cleaned = [];
+      for (const item of items) {
+        const trimmed = String(item || "").trim();
+        if (!trimmed) continue;
+        const norm = normalizeAllowedOrigin(trimmed);
+        if (!norm) {
+          return NextResponse.json(
+            { error: `corsAllowedOrigins entry không hợp lệ: ${trimmed}. Dùng dạng https://host(:port) hoặc *.` },
+            { status: 400 }
+          );
+        }
+        cleaned.push(norm);
+      }
+      body.corsAllowedOrigins = cleaned;
+    }
+
     const settings = await updateSettings(body);
 
     // Apply outbound proxy settings immediately (no restart required)
@@ -145,7 +170,6 @@ export async function PATCH(request) {
     safeSettings.apibankConfigured = !!(safeSettings.apibankBaseUrl && apibankApiKey && safeSettings.apibankBankAccountId && apibankWebhookSecret);
     return NextResponse.json(safeSettings, { headers: SETTINGS_RESPONSE_HEADERS });
   } catch (error) {
-    console.log("Error updating settings:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return apiError(error, "Failed to update settings", 500, "settings/update");
   }
 }

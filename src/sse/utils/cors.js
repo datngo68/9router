@@ -4,14 +4,45 @@
 // Server-to-server requests (no Origin header) are unaffected — CORS is a
 // browser-only mechanism, so omitting headers does not block curl, server
 // fetch, or CLI tools.
+//
+// Hardening notes:
+//   • The list is sourced from admin settings, so we validate each item
+//     matches `https?://hostname(:port)?` and silently drop malformed entries.
+//   • Wildcard `*` echoes the request origin instead of returning literal `*`.
+//     This keeps the door open even if a future caller pairs the response
+//     with `Access-Control-Allow-Credentials: true` (browsers reject `*` +
+//     credentials), and it's also safer when admin pastes `*` "to test"
+//     without realising it disables the allowlist entirely. We log a one-shot
+//     warning so the operator can fix the config.
 
 import { getSettings } from "@/lib/localDb";
 
 const ALLOW_METHODS = "GET, POST, OPTIONS";
 const ALLOW_HEADERS = "Authorization, Content-Type, x-api-key, anthropic-version, x-stainless-os, x-stainless-package-version, x-stainless-runtime, x-stainless-runtime-version, x-stainless-arch, x-stainless-lang, x-stainless-helper-method";
 
+// Accept "https://host" or "https://host:port"; allow `*` as a sentinel.
+// Matches scheme+host(+optional port) only — paths/query/fragments are
+// invalid because Origin headers don't include them.
+const ORIGIN_PATTERN = /^https?:\/\/[a-z0-9.-]+(?::\d{1,5})?$/i;
+
 let cached = { ts: 0, list: [] };
 const CACHE_MS = 5000;
+let warnedWildcard = false;
+
+/**
+ * Validate that a raw origin string is well-formed enough to compare with
+ * the browser-supplied `Origin` header. Returns the lowercased origin or
+ * null if the entry is malformed.
+ *
+ * Exported for unit tests; callers shouldn't need it.
+ */
+export function normalizeAllowedOrigin(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return null;
+  if (s === "*") return "*";
+  if (!ORIGIN_PATTERN.test(s)) return null;
+  return s.toLowerCase();
+}
 
 async function loadAllowedOrigins() {
   const now = Date.now();
@@ -19,11 +50,21 @@ async function loadAllowedOrigins() {
   try {
     const s = await getSettings();
     const raw = s?.corsAllowedOrigins;
-    const list = Array.isArray(raw) ? raw : (typeof raw === "string" ? raw.split(",") : []);
-    cached = {
-      ts: now,
-      list: list.map((o) => String(o).trim().toLowerCase()).filter(Boolean),
-    };
+    const items = Array.isArray(raw) ? raw : (typeof raw === "string" ? raw.split(",") : []);
+    const validated = [];
+    for (const item of items) {
+      const norm = normalizeAllowedOrigin(item);
+      if (norm) {
+        validated.push(norm);
+      } else if (String(item || "").trim()) {
+        console.log(`[cors] ignoring invalid origin: ${String(item).slice(0, 80)}`);
+      }
+    }
+    if (validated.includes("*") && !warnedWildcard) {
+      console.log("[cors] WARNING: wildcard '*' in corsAllowedOrigins — echoing the request origin to keep credentialed requests safe. Replace with explicit origins.");
+      warnedWildcard = true;
+    }
+    cached = { ts: now, list: validated };
   } catch {
     cached = { ts: now, list: [] };
   }
@@ -41,6 +82,11 @@ function originAllowed(origin, allowList) {
  * Build CORS headers for a request. If the request has no Origin header,
  * returns an empty object (server-to-server, no CORS needed). Otherwise
  * returns headers reflecting the requested origin only when allowlisted.
+ *
+ * We intentionally never return `Access-Control-Allow-Origin: *` — even when
+ * the admin has configured wildcard. Echoing the origin is equivalent for
+ * non-credentialed requests and stays compatible with future credentialed
+ * use without a config change.
  */
 export async function buildCorsHeaders(request) {
   const origin = request.headers?.get?.("origin") || null;

@@ -379,6 +379,27 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
     // Use shared chatCore
     const chatSettings = await getSettings();
     const providerThinking = (chatSettings.providerThinking || {})[provider] || null;
+
+    // Per-key compress overrides. "inherit" → use global setting; "on/off" or
+    // explicit caveman level → override. Caveman "off" disables completely.
+    const keyRtkMode = apiKeyRecord?.rtkMode || "inherit";
+    const effectiveRtk = keyRtkMode === "inherit"
+      ? !!chatSettings.rtkEnabled
+      : keyRtkMode === "on";
+
+    const keyCavemanMode = apiKeyRecord?.cavemanMode || "inherit";
+    let effectiveCavemanEnabled;
+    let effectiveCavemanLevel;
+    if (keyCavemanMode === "inherit") {
+      effectiveCavemanEnabled = !!chatSettings.cavemanEnabled;
+      effectiveCavemanLevel = chatSettings.cavemanLevel || "full";
+    } else if (keyCavemanMode === "off") {
+      effectiveCavemanEnabled = false;
+      effectiveCavemanLevel = "full";
+    } else {
+      effectiveCavemanEnabled = true;
+      effectiveCavemanLevel = keyCavemanMode;
+    }
     const result = await handleChatCore({
       body: { ...body, model: `${provider}/${model}` },
       modelInfo: { provider, model },
@@ -389,9 +410,9 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       userAgent,
       apiKeyId,
       ccFilterNaming: !!chatSettings.ccFilterNaming,
-      rtkEnabled: !!chatSettings.rtkEnabled,
-      cavemanEnabled: !!chatSettings.cavemanEnabled,
-      cavemanLevel: chatSettings.cavemanLevel || "full",
+      rtkEnabled: effectiveRtk,
+      cavemanEnabled: effectiveCavemanEnabled,
+      cavemanLevel: effectiveCavemanLevel,
       providerThinking,
       // Detect source format by endpoint + body
       sourceFormatOverride: request?.url ? detectFormatByEndpoint(new URL(request.url).pathname, body) : null,

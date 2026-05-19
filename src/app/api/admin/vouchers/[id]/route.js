@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getVoucherById, updateVoucher, deleteVoucher, getRedemptionsForVoucher } from "@/lib/localDb";
+import { apiError } from "@/shared/utils/apiError";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +22,7 @@ export async function PATCH(request, { params }) {
     if (!voucher) return NextResponse.json({ error: "Not found" }, { status: 404 });
     return NextResponse.json({ voucher });
   } catch (e) {
-    return NextResponse.json({ error: e.message || "Update failed" }, { status: 400 });
+    return apiError(e, "Update failed", 400, "admin/vouchers/:id");
   }
 }
 

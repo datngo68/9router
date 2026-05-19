@@ -4,11 +4,12 @@ import { getCustomerById, verifyCustomerPassword } from "@/lib/localDb";
 import { verifyTotpCode } from "@/lib/auth/customerTotp";
 import { setCustomerSessionCookie } from "@/lib/auth/customerSession";
 import { recordFailure, clearFailures, checkLogin, getClientIp } from "@/lib/auth/loginThrottle";
+import { parseJsonBody, CustomerLoginSchema } from "@/lib/validation/schemas";
 
 export const dynamic = "force-dynamic";
 
 // POST /api/account/login
-//   body: { email, password }
+//   body: { email, password, totpCode? }
 export async function POST(request) {
   const ip = getClientIp(request);
   const lock = checkLogin(`customerLogin:${ip}`);
@@ -20,18 +21,9 @@ export async function POST(request) {
     );
   }
 
-  let body;
-  try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
-  }
-
-  const { email, password, totpCode } = body || {};
-  if (!email || !password) {
-    recordFailure(`customerLogin:${ip}`);
-    return NextResponse.json({ error: "email and password are required" }, { status: 400 });
-  }
+  const parsed = await parseJsonBody(request, CustomerLoginSchema);
+  if (parsed.response) return parsed.response;
+  const { email, password, totpCode } = parsed.value;
 
   const customer = await verifyCustomerPassword(email, password);
   if (!customer) {

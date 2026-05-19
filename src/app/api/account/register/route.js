@@ -5,6 +5,7 @@ import { validateRegistrationPayload } from "@/lib/auth/customerRegistration";
 import { setCustomerSessionCookie } from "@/lib/auth/customerSession";
 import { recordFailure, checkLogin, getClientIp } from "@/lib/auth/loginThrottle";
 import { sendWelcomeEmail } from "@/lib/notify/email";
+import { apiError } from "@/shared/utils/apiError";
 
 export const dynamic = "force-dynamic";
 
@@ -44,7 +45,7 @@ export async function POST(request) {
     if (String(e.message).includes("already registered")) {
       return NextResponse.json({ error: "Could not register with that email" }, { status: 409 });
     }
-    return NextResponse.json({ error: e.message || "Registration failed" }, { status: 400 });
+    return apiError(e, "Registration failed", 400, "account/register");
   }
 
   await sendWelcomeEmail({ email: customer.email, displayName: customer.displayName });

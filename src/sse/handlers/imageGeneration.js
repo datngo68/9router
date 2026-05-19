@@ -20,8 +20,13 @@ const NO_AUTH_PROVIDERS = new Set(["sdwebui", "comfyui"]);
 /**
  * Handle image generation request
  * @param {Request} request
+ * @param {object} [options]
+ * @param {object} [options.preloadedApiKeyRecord] - When supplied (e.g. from internal
+ *   store-chat proxy where the raw key never leaves the DB), skip the extract/validate
+ *   step and treat the request as authenticated.
  */
-export async function handleImageGeneration(request) {
+export async function handleImageGeneration(request, options = {}) {
+  const { preloadedApiKeyRecord = null } = options;
   let body;
   try {
     body = await request.json();
@@ -35,12 +40,14 @@ export async function handleImageGeneration(request) {
   const binaryOutput = url.searchParams.get("response_format") === "binary";
   const modelStr = body.model;
 
-  const apiKey = extractApiKey(request);
-  const settings = await getSettings();
-  if (settings.requireApiKey) {
-    if (!apiKey) return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");
-    const valid = await isValidApiKey(apiKey);
-    if (!valid) return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key");
+  if (!preloadedApiKeyRecord) {
+    const apiKey = extractApiKey(request);
+    const settings = await getSettings();
+    if (settings.requireApiKey) {
+      if (!apiKey) return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");
+      const valid = await isValidApiKey(apiKey);
+      if (!valid) return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key");
+    }
   }
 
   if (!modelStr) return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing model");

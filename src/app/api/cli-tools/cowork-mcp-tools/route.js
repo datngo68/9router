@@ -90,6 +90,7 @@ export async function POST(request) {
     const result = await probeMcp(url);
     return NextResponse.json(result);
   } catch (e) {
-    return NextResponse.json({ error: e.message, tools: [] }, { status: 500 });
+    console.error("[cowork-mcp-tools] error:", e?.stack || e?.message || e);
+    return NextResponse.json({ error: "Probe failed", tools: [] }, { status: 500 });
   }
 }

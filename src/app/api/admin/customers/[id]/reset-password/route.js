@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCustomerById } from "@/lib/localDb";
 import { createCustomerToken } from "@/lib/auth/customerToken";
 import { sendPasswordResetEmail } from "@/lib/notify/email";
+import { requireRole } from "@/lib/auth/rbac";
 
 export const dynamic = "force-dynamic";
 
@@ -9,8 +10,14 @@ export const dynamic = "force-dynamic";
 //   Admin trigger: gửi email đặt lại mật khẩu cho khách. Dùng cùng cơ chế
 //   token + email với /api/account/forgot, nhưng không cần check throttle vì
 //   chỉ admin gọi được.
-export async function POST(_request, { params }) {
+export async function POST(request, { params }) {
   const { id } = await params;
+  const auth = await requireRole(request, "admin", {
+    action: "customer.reset_password",
+    targetType: "customer",
+    targetId: id,
+  });
+  if (auth.response) return auth.response;
   const customer = await getCustomerById(id);
   if (!customer) return NextResponse.json({ error: "Customer not found" }, { status: 404 });
   if (!customer.email) return NextResponse.json({ error: "Customer has no email" }, { status: 400 });

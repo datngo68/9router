@@ -7,7 +7,7 @@ import { v4 as uuidv4 } from "uuid";
 import bcrypt from "bcryptjs";
 import { getAdapter } from "../driver.js";
 
-const BCRYPT_COST = 10;
+const BCRYPT_COST = 12;
 
 function rowToCustomer(row) {
   if (!row) return null;
@@ -96,7 +96,37 @@ export async function verifyCustomerPassword(email, password) {
   if (!customer) return null;
   if (!customer.passwordHash) return null;
   if (!ok) return null;
+  // Lazy upgrade: if the stored hash uses an older cost factor, rehash with
+  // the current BCRYPT_COST. Failure to rehash must never block login.
+  rehashIfNeeded(customer.id, password).catch(() => {});
   return publicView(customer);
+}
+
+/**
+ * If the customer's stored bcrypt hash has rounds < BCRYPT_COST, replace it
+ * with a fresh hash. Cheap to call on every successful login. Returns true
+ * when an update happened, false otherwise. Never throws.
+ */
+export async function rehashIfNeeded(customerId, password) {
+  if (!customerId || !password) return false;
+  try {
+    const db = await getAdapter();
+    const row = db.get(`SELECT passwordHash FROM customers WHERE id = ?`, [customerId]);
+    const hash = row?.passwordHash;
+    if (!hash) return false;
+    // bcrypt format: $2[a|b|y]$<cost>$<22-char-salt><hash>
+    const m = /^\$2[aby]\$(\d{2})\$/.exec(hash);
+    const rounds = m ? parseInt(m[1], 10) : 0;
+    if (rounds >= BCRYPT_COST) return false;
+    const next = await bcrypt.hash(String(password), BCRYPT_COST);
+    db.run(
+      `UPDATE customers SET passwordHash = ?, updatedAt = ? WHERE id = ?`,
+      [next, new Date().toISOString(), customerId]
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function findCustomerByGoogleSub(googleSub, { withPassword = false } = {}) {

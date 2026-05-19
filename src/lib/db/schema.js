@@ -1,5 +1,5 @@
 // Latest schema version — bumped when a migration is added in ./migrations/
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 14;
 
 export const PRAGMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -89,6 +89,8 @@ export const TABLES = {
       expiresAt: "TEXT",
       allowedModels: "TEXT DEFAULT '[]'",
       allowedIps: "TEXT DEFAULT '[]'",
+      rtkMode: "TEXT DEFAULT 'inherit'",
+      cavemanMode: "TEXT DEFAULT 'inherit'",
       customerId: "TEXT",
       orderId: "TEXT",
       createdAt: "TEXT NOT NULL",
@@ -314,6 +316,36 @@ export const TABLES = {
       "CREATE INDEX IF NOT EXISTS idx_rd_provider ON requestDetails(provider)",
       "CREATE INDEX IF NOT EXISTS idx_rd_model ON requestDetails(model)",
       "CREATE INDEX IF NOT EXISTS idx_rd_conn ON requestDetails(connectionId)",
+    ],
+  },
+  loginThrottle: {
+    columns: {
+      key: "TEXT PRIMARY KEY",
+      fails: "TEXT NOT NULL DEFAULT '[]'",
+      lockedUntil: "INTEGER",
+      updatedAt: "INTEGER NOT NULL",
+    },
+    indexes: [
+      "CREATE INDEX IF NOT EXISTS idx_lt_locked ON loginThrottle(lockedUntil)",
+    ],
+  },
+  adminAuditLog: {
+    columns: {
+      id: "INTEGER PRIMARY KEY AUTOINCREMENT",
+      createdAt: "TEXT NOT NULL",
+      actorRole: "TEXT",
+      action: "TEXT NOT NULL",
+      targetType: "TEXT",
+      targetId: "TEXT",
+      ip: "TEXT",
+      userAgent: "TEXT",
+      payloadHash: "TEXT",
+      meta: "TEXT",
+    },
+    indexes: [
+      "CREATE INDEX IF NOT EXISTS idx_aal_created ON adminAuditLog(createdAt DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_aal_action ON adminAuditLog(action)",
+      "CREATE INDEX IF NOT EXISTS idx_aal_target ON adminAuditLog(targetType, targetId)",
     ],
   },
 };

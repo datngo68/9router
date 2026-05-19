@@ -13,6 +13,7 @@ import {
   initDbHooks,
 } from "@/mitm/manager";
 import { getSettings, updateSettings } from "@/lib/localDb";
+import { apiError } from "@/shared/utils/apiError";
 
 initDbHooks(getSettings, updateSettings);
 
@@ -127,14 +128,14 @@ export async function POST(request) {
 
     return NextResponse.json({ success: true, running: result.running, pid: result.pid });
   } catch (error) {
-    console.log("Error starting MITM server:", error.message);
     if (error.code === "PORT_443_BUSY") {
+      console.error("[antigravity-mitm] PORT_443_BUSY:", error?.message || error);
       return NextResponse.json(
         { error: error.message, code: "PORT_443_BUSY", portOwner: error.portOwner },
         { status: 409 }
       );
     }
-    return NextResponse.json({ error: error.message || "Failed to start MITM server" }, { status: 500 });
+    return apiError(error, "Failed to start MITM server", 500, "antigravity-mitm/start");
   }
 }
 
@@ -154,8 +155,7 @@ export async function DELETE(request) {
 
     return NextResponse.json({ success: true, running: false });
   } catch (error) {
-    console.log("Error stopping MITM server:", error.message);
-    return NextResponse.json({ error: error.message || "Failed to stop MITM server" }, { status: 500 });
+    return apiError(error, "Failed to stop MITM server", 500, "antigravity-mitm/stop");
   }
 }
 
@@ -196,7 +196,6 @@ export async function PATCH(request) {
     const status = await getMitmStatus();
     return NextResponse.json({ success: true, dnsStatus: status.dnsStatus });
   } catch (error) {
-    console.log("Error toggling DNS:", error.message);
-    return NextResponse.json({ error: error.message || "Failed to toggle DNS" }, { status: 500 });
+    return apiError(error, "Failed to toggle DNS", 500, "antigravity-mitm/dns");
   }
 }

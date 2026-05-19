@@ -15,6 +15,7 @@
 import { v4 as uuidv4 } from "uuid";
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
+import { BadRequestError } from "@/shared/utils/apiError";
 
 const VALID_KINDS = new Set(["percent", "fixed"]);
 
@@ -51,20 +52,20 @@ function rowToVoucher(row) {
 }
 
 function validateInput(input) {
-  if (!input.code) throw new Error("code is required");
-  if (!VALID_KINDS.has(input.kind)) throw new Error(`kind must be one of: ${[...VALID_KINDS].join(", ")}`);
+  if (!input.code) throw new BadRequestError("code là bắt buộc");
+  if (!VALID_KINDS.has(input.kind)) throw new BadRequestError(`kind phải là: ${[...VALID_KINDS].join(", ")}`);
   const value = Number(input.value || 0);
   if (input.kind === "percent" && (value <= 0 || value > 100)) {
-    throw new Error("value must be 1..100 for percent vouchers");
+    throw new BadRequestError("Phần trăm phải từ 1..100");
   }
   if (input.kind === "fixed" && value <= 0) {
-    throw new Error("value must be > 0 for fixed vouchers");
+    throw new BadRequestError("Số tiền phải > 0");
   }
   if (input.validFrom && input.validTo && new Date(input.validFrom) > new Date(input.validTo)) {
-    throw new Error("validFrom must be before validTo");
+    throw new BadRequestError("Hiệu lực từ phải trước Hiệu lực đến");
   }
   if (!Array.isArray(input.scopePlanIds) || input.scopePlanIds.length === 0) {
-    throw new Error("scopePlanIds must contain at least one plan id");
+    throw new BadRequestError("Phải chọn ít nhất 1 gói áp dụng");
   }
 }
 
@@ -93,7 +94,7 @@ export async function createVoucher(input) {
   const now = new Date().toISOString();
   const code = normalizeCode(input.code);
   const existing = db.get(`SELECT id FROM vouchers WHERE code = ?`, [code]);
-  if (existing) throw new Error("code already exists");
+  if (existing) throw new BadRequestError("Mã đã tồn tại");
   db.run(
     `INSERT INTO vouchers(id, code, description, kind, value, scopePlanIds, maxUses, maxPerCustomer, usedCount, validFrom, validTo, minOrderVnd, firstOrderOnly, isActive, createdAt, updatedAt)
      VALUES(?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)`,
@@ -129,7 +130,7 @@ export async function updateVoucher(id, patch) {
   const db = await getAdapter();
   if (merged.code !== existing.code) {
     const dup = db.get(`SELECT id FROM vouchers WHERE code = ? AND id != ?`, [merged.code, id]);
-    if (dup) throw new Error("code already exists");
+    if (dup) throw new BadRequestError("Mã đã tồn tại");
   }
   const now = new Date().toISOString();
   db.run(

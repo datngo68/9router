@@ -54,6 +54,11 @@ function loadKey() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const generated = crypto.randomBytes(KEY_LEN);
   writeSecretFile(file, generated.toString("hex"));
+  console.warn(
+    `\n[secretBox] secret-key auto-generated at ${file}.\n` +
+    "  Back this file up alongside your DB — losing it makes encrypted credentials unrecoverable.\n" +
+    "  For multi-host deploys, set SECRET_KEY env to a 32-byte hex/base64url value instead.\n"
+  );
   cachedKey = generated;
   return cachedKey;
 }

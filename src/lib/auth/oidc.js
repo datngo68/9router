@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { getSettings } from "@/lib/localDb";
+import { safeFetch } from "@/shared/net/safeFetch";
 
 export const OIDC_COOKIE_NAMES = {
   state: "oidc_state",
@@ -64,7 +65,7 @@ export async function getOidcRuntimeConfig() {
 
 export async function fetchOidcDiscovery(issuerUrl) {
   const discoveryUrl = `${trimTrailingSlashes(issuerUrl)}/.well-known/openid-configuration`;
-  const res = await fetch(discoveryUrl, { cache: "no-store" });
+  const res = await safeFetch(discoveryUrl, { cache: "no-store" });
   if (!res.ok) {
     throw new Error(`Failed to load OIDC discovery document from ${discoveryUrl}`);
   }
@@ -126,7 +127,7 @@ export async function exchangeOidcCode({
     body.set("client_secret", clientSecret);
   }
 
-  const res = await fetch(tokenEndpoint, {
+  const res = await safeFetch(tokenEndpoint, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
@@ -164,7 +165,7 @@ export async function probeOidcClientSecret({
     code_verifier: "__oidc_test_invalid_verifier__",
   });
 
-  const res = await fetch(tokenEndpoint, {
+  const res = await safeFetch(tokenEndpoint, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,

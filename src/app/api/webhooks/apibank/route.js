@@ -28,6 +28,7 @@ import { getConsistentMachineId } from "@/shared/utils/machineId";
 import { sendKeyDeliveredEmail } from "@/lib/notify/email";
 import { notifyCustomerKeyDelivered, notifyAdminOrderConfirmed, resolvePublicUrl } from "@/lib/notify/telegram";
 import { getClientIp } from "@/lib/auth/loginThrottle";
+import { apiError } from "@/shared/utils/apiError";
 
 export const dynamic = "force-dynamic";
 
@@ -157,8 +158,7 @@ export async function POST(request) {
   } catch (e) {
     // Don't mark processed — APIBank will retry, giving us a chance to
     // recover from transient failures (DB locked, etc.).
-    console.log(`[apibank webhook] confirm failed for ${order.id}:`, e.message);
-    return NextResponse.json({ error: e.message || "confirm failed" }, { status: 500 });
+    return apiError(e, "confirm failed", 500, "webhooks/apibank");
   }
 
   await markWebhookEventProcessed(evtId);

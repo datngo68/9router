@@ -6,6 +6,7 @@ import { resolveOllamaLocalHost, resolveXiaomiTokenplanBaseUrl, PROVIDERS } from
 import { openaiToCommandCode } from "open-sse/translator/request/openai-to-commandcode.js";
 import { PROVIDER_ENDPOINTS } from "@/shared/constants/config";
 import { normalizeProviderId } from "@/lib/providerNormalization";
+import { safeFetch } from "@/shared/net/safeFetch";
 
 // Probe a webSearch/webFetch provider using its searchConfig/fetchConfig.
 // Returns true if API key is accepted (status !== 401 && !== 403).
@@ -104,7 +105,7 @@ export async function POST(request) {
           return NextResponse.json({ error: "OpenAI Compatible node not found" }, { status: 404 });
         }
         const modelsUrl = `${node.baseUrl?.replace(/\/$/, "")}/models`;
-        const res = await fetch(modelsUrl, {
+        const res = await safeFetch(modelsUrl, {
           headers: { "Authorization": `Bearer ${apiKey}` },
         });
         isValid = res.ok;
@@ -121,7 +122,7 @@ export async function POST(request) {
           return NextResponse.json({ error: "Custom Embedding node not found" }, { status: 404 });
         }
         const baseUrl = node.baseUrl?.replace(/\/$/, "");
-        const modelsRes = await fetch(`${baseUrl}/models`, {
+        const modelsRes = await safeFetch(`${baseUrl}/models`, {
           headers: { "Authorization": `Bearer ${apiKey}` },
         });
         if (modelsRes.ok) {
@@ -132,7 +133,7 @@ export async function POST(request) {
           return NextResponse.json({ valid: false, error: "Invalid API key" });
         }
         // Fallback: probe /embeddings with a common test model — many providers lack /models
-        const embedRes = await fetch(`${baseUrl}/embeddings`, {
+        const embedRes = await safeFetch(`${baseUrl}/embeddings`, {
           method: "POST",
           headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
           body: JSON.stringify({ model: "test", input: "ping" }),
@@ -158,7 +159,7 @@ export async function POST(request) {
 
         const modelsUrl = `${normalizedBase}/models`;
 
-        const res = await fetch(modelsUrl, {
+        const res = await safeFetch(modelsUrl, {
           headers: {
             "x-api-key": apiKey,
             "anthropic-version": "2023-06-01",
@@ -210,7 +211,7 @@ export async function POST(request) {
         };
         if (organization) headers["OpenAI-Organization"] = organization;
 
-        const azureRes = await fetch(url, {
+        const azureRes = await safeFetch(url, {
           method: "POST",
           headers,
           body: JSON.stringify({
@@ -386,7 +387,11 @@ export async function POST(request) {
           };
           const headers = {};
           if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
-          const res = await fetch(endpoints[provider], { headers });
+          // Wrap with safeFetch only for endpoints whose host depends on user input
+          // (ollama-local + xiaomi-tokenplan); the others are hardcoded public hosts.
+          const userControlled = provider === "ollama-local" || provider === "xiaomi-tokenplan";
+          const fetchFn = userControlled ? safeFetch : fetch;
+          const res = await fetchFn(endpoints[provider], { headers });
           // xai returns 400 for bad key, 403 for valid-but-no-credit. Other providers use 401.
           if (provider === "xai") {
             isValid = res.status === 200 || res.status === 403;

@@ -6,6 +6,7 @@ import {
   getApiKeyMonthlyTokenUsage,
   getApiKeyLifetimeTokenUsage,
 } from "@/lib/db/repos/usageRepo.js";
+import { requireRole } from "@/lib/auth/rbac";
 
 export const dynamic = "force-dynamic";
 
@@ -155,6 +156,8 @@ export async function GET(_request, { params }) {
 // PATCH /api/admin/customers/[id]
 //   body: { displayName?, phone?, telegramChatId?, notes? }
 export async function PATCH(request, { params }) {
+  const auth = await requireRole(request, "admin");
+  if (auth.response) return auth.response;
   const { id } = await params;
   let body;
   try { body = await request.json(); }
