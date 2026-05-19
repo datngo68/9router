@@ -1,21 +1,17 @@
 import { NextResponse } from "next/server";
-import { v4 as uuidv4 } from "uuid";
 import { requireRole } from "@/lib/auth/rbac";
 import { apiError } from "@/shared/utils/apiError";
+import { listAllNotifications } from "@/lib/db/repos/notificationsRepo";
 import {
-  createNotification,
-  listAllNotifications,
-} from "@/lib/db/repos/notificationsRepo";
-import { getCustomers, getCustomerById } from "@/lib/localDb";
-import { sendCustomNotificationEmail } from "@/lib/notify/email";
-import { notifyCustomerCustom } from "@/lib/notify/telegram";
+  sendOrScheduleNotification,
+  VALID_TYPES,
+  VALID_CHANNELS,
+} from "@/lib/notifications/dispatch";
 
 export const dynamic = "force-dynamic";
 
-const VALID_TYPES = new Set(["info", "success", "warning", "alert"]);
-const VALID_CHANNELS = new Set(["inapp", "email", "telegram"]);
-
-// GET /api/admin/notifications?q=&type=&scope=
+// GET /api/admin/notifications?q=&type=&scope=&status=
+//   status: 'sent' (default), 'scheduled', 'cancelled', 'failed', 'all'
 export async function GET(request) {
   const auth = await requireRole(request, "operator");
   if (auth.response) return auth.response;
@@ -23,16 +19,23 @@ export async function GET(request) {
   const q = url.searchParams.get("q") || "";
   const type = url.searchParams.get("type") || "";
   const scope = url.searchParams.get("scope") || "";
-  const items = await listAllNotifications({ q, type, scope });
+  const status = url.searchParams.get("status") || "";
+  const items = await listAllNotifications({ q, type, scope, status });
   return NextResponse.json({ items });
 }
 
 // POST /api/admin/notifications
 //   body: {
-//     target: "all" | "customer",
-//     customerId?, customerIds?,  (customerIds when target=customer + nhiều)
+//     target: "all" | "customers" | "filter",
+//     // target=customers
+//     customerIds?: string[],
+//     customerId?:  string,            // legacy single-id, kept for backcompat
+//     // target=filter
+//     filter?: { planIds?: string[], hasTelegram?: bool,
+//                hasVerifiedEmail?: bool, q?: string },
 //     title, body, type?, link?,
-//     channels: ["inapp","email","telegram"]
+//     channels: ["inapp","email","telegram"],
+//     scheduleAt?: ISO 8601 string  -> send later
 //   }
 export async function POST(request) {
   const auth = await requireRole(request, "admin", { action: "notification.create" });
@@ -49,7 +52,12 @@ export async function POST(request) {
 
   const type = VALID_TYPES.has(body?.type) ? body.type : "info";
   const link = body?.link ? String(body.link).trim() : null;
-  const target = body?.target === "customer" ? "customer" : "all";
+
+  const rawTarget = body?.target;
+  // Accept legacy "customer" alias for "customers".
+  const target = rawTarget === "customer" || rawTarget === "customers"
+    ? "customers"
+    : rawTarget === "filter" ? "filter" : "all";
 
   const channels = Array.isArray(body?.channels)
     ? body.channels.filter((c) => VALID_CHANNELS.has(c))
@@ -58,84 +66,60 @@ export async function POST(request) {
 
   const sessionRole = auth.session?.role || "admin";
 
-  try {
-    if (target === "all") {
-      // Broadcast: 1 row with customerId=NULL (inapp). For email/telegram we
-      // still iterate over all customers to dispatch per-channel.
-      const created = channels.includes("inapp")
-        ? await createNotification({ customerId: null, title, body: text, type, link, channels, createdBy: sessionRole })
-        : { id: uuidv4(), broadcast: true };
-
-      // Fire-and-forget email + telegram dispatch.
-      if (channels.includes("email") || channels.includes("telegram")) {
-        const customers = await getCustomers();
-        dispatchExternal({ customers, channels, title, body: text, link }).catch((e) =>
-          console.log("[admin/notifications] dispatch failed:", e.message)
-        );
-      }
-      return NextResponse.json({ ok: true, notification: created, recipientCount: "all" });
-    }
-
-    // target === "customer": single or array of ids
+  let spec;
+  if (target === "customers") {
     const ids = Array.isArray(body?.customerIds) && body.customerIds.length > 0
       ? body.customerIds.map(String)
       : (body?.customerId ? [String(body.customerId)] : []);
     if (ids.length === 0) {
-      return NextResponse.json({ error: "customerId or customerIds required" }, { status: 400 });
+      return NextResponse.json({ error: "customerIds required" }, { status: 400 });
+    }
+    spec = { target: "customers", ids };
+  } else if (target === "filter") {
+    const f = body?.filter || {};
+    spec = {
+      target: "filter",
+      planIds: Array.isArray(f.planIds) ? f.planIds.map(String) : [],
+      hasTelegram: !!f.hasTelegram,
+      hasVerifiedEmail: !!f.hasVerifiedEmail,
+      q: f.q ? String(f.q) : "",
+    };
+  } else {
+    spec = { target: "all" };
+  }
+
+  const scheduleAt = body?.scheduleAt ? String(body.scheduleAt) : null;
+
+  try {
+    const result = await sendOrScheduleNotification({
+      spec,
+      title,
+      body: text,
+      type,
+      link,
+      channels,
+      createdBy: sessionRole,
+      scheduleAt,
+    });
+
+    if (result.scheduled) {
+      return NextResponse.json({
+        ok: true,
+        scheduled: true,
+        notification: result.notification,
+      });
     }
 
-    const customers = [];
-    for (const id of ids) {
-      const c = await getCustomerById(id);
-      if (c) customers.push(c);
-    }
-    if (customers.length === 0) {
+    if (target === "customers" && result.recipientCount === 0) {
       return NextResponse.json({ error: "No matching customer" }, { status: 404 });
     }
-
-    const created = [];
-    if (channels.includes("inapp")) {
-      for (const c of customers) {
-        const n = await createNotification({
-          customerId: c.id, title, body: text, type, link, channels, createdBy: sessionRole,
-        });
-        created.push(n);
-      }
-    }
-
-    if (channels.includes("email") || channels.includes("telegram")) {
-      dispatchExternal({ customers, channels, title, body: text, link }).catch((e) =>
-        console.log("[admin/notifications] dispatch failed:", e.message)
-      );
-    }
-
-    return NextResponse.json({ ok: true, recipientCount: customers.length, created });
+    return NextResponse.json({
+      ok: true,
+      scheduled: false,
+      recipientCount: result.recipientCount,
+      created: result.created,
+    });
   } catch (e) {
     return apiError(e, "Failed to create notification", 500, "admin/notifications");
-  }
-}
-
-async function dispatchExternal({ customers, channels, title, body, link }) {
-  for (const c of customers) {
-    if (channels.includes("email") && c.email) {
-      try {
-        await sendCustomNotificationEmail({
-          email: c.email,
-          displayName: c.displayName,
-          title,
-          body,
-          link,
-        });
-      } catch (e) {
-        console.log("[admin/notifications] email failed:", e.message);
-      }
-    }
-    if (channels.includes("telegram") && c.telegramChatId) {
-      try {
-        await notifyCustomerCustom({ customer: c, title, body, link });
-      } catch (e) {
-        console.log("[admin/notifications] telegram failed:", e.message);
-      }
-    }
   }
 }

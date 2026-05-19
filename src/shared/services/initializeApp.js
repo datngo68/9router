@@ -19,6 +19,7 @@ import {
 } from "@/lib/tunnel/tunnelConfig";
 import { getMitmStatus, startMitm, loadEncryptedPassword, initDbHooks, restoreToolDNS, removeAllDNSEntriesSync } from "@/mitm/manager";
 import { syncToJson as syncMitmAliasCache } from "@/lib/mitmAliasCache";
+import { startNotificationScheduler } from "@/lib/notifications/scheduler";
 
 // Inject correct paths and DB hooks into manager.js (CJS) from ESM context
 (function bootstrapMitm() {
@@ -94,6 +95,7 @@ export async function initializeApp() {
     startWatchdog();
     startNetworkMonitor();
     autoStartMitm();
+    try { startNotificationScheduler(); } catch (e) { console.log("[InitApp] notification scheduler failed:", e.message); }
   } catch (error) {
     console.error("[InitApp] Error:", error);
   }
