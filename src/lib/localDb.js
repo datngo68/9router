@@ -26,8 +26,13 @@ export {
   revokeCustomerSession, revokeAllSessionsForCustomer, pruneExpiredSessions,
   getPricingPlans, getPricingPlanById, createPricingPlan,
   updatePricingPlan, deletePricingPlan, planToApiKeyPolicy,
+  getVouchers, getVoucherById, getVoucherByCode,
+  createVoucher, updateVoucher, deleteVoucher,
+  validateVoucherForOrder, redeemVoucherInTxn,
+  getRedemptionsForVoucher,
   createOrder, createTopupOrder, getOrderById, getOrders,
   cancelOrder, markOrderRefunded, confirmOrderAtomic,
   attachApibankOrder, findOrderByApibankRef,
+  countCustomerPlanPurchases,
   exportDb, importDb,
 } from "@/lib/db/index.js";
