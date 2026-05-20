@@ -1,7 +1,10 @@
 import { getApiKeyByKey } from "@/lib/localDb";
 import { getApiKeyDailyTokenUsage, getApiKeyMonthlyTokenUsage, getApiKeyLifetimeTokenUsage } from "@/lib/usageDb";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
-import { getReservedTokens } from "./apiKeyReservation.js";
+import { getReservedTokens, getReservedWalletMicroVnd } from "./apiKeyReservation.js";
+import { getAdapter } from "@/lib/db/driver.js";
+import { hashApiKey } from "@/lib/db/repos/apiKeysRepo.js";
+import { parseJson } from "@/lib/db/helpers/jsonCol.js";
 
 function normalizeModelId(model) {
   return typeof model === "string" ? model.trim().toLowerCase() : "";
@@ -17,9 +20,77 @@ function nextMonthIso(date = new Date()) {
   return next.toISOString();
 }
 
+/**
+ * Single-query lookup for API key + customer wallet snapshot. Reuses the
+ * idx_ak_keyhash index. Returns the apiKey record extended with:
+ *   - walletBalance       (micro-VND, 0 when no customer)
+ *   - walletMinLimit      (micro-VND, 0 default)
+ *   - paygEnabled         (boolean)
+ */
 export async function loadApiKeyPolicy(apiKey) {
   if (!apiKey) return null;
-  return getApiKeyByKey(apiKey);
+  const db = await getAdapter();
+  const row = db.get(
+    `SELECT k.*,
+            c.balance AS _walletBalance,
+            c.balanceMinLimit AS _walletMinLimit
+       FROM apiKeys k
+       LEFT JOIN customers c ON c.id = k.customerId
+      WHERE k.keyHash = ?`,
+    [hashApiKey(apiKey)]
+  );
+  if (!row) return null;
+  return mapRow(row);
+}
+
+function mapRow(row) {
+  return {
+    id: row.id,
+    keyHash: row.keyHash || null,
+    keyPrefix: row.keyPrefix || null,
+    keyLast4: row.keyLast4 || null,
+    keyDisplay: row.keyPrefix ? `${row.keyPrefix}...${row.keyLast4 || ""}` : null,
+    name: row.name,
+    machineId: row.machineId,
+    isActive: row.isActive === 1 || row.isActive === true,
+    dailyTokenLimit: Number(row.dailyTokenLimit || 0),
+    monthlyTokenLimit: Number(row.monthlyTokenLimit || 0),
+    lifetimeTokenLimit: Number(row.lifetimeTokenLimit || 0),
+    requestsPerMinute: Number(row.requestsPerMinute || 0),
+    maxTokensPerRequest: Number(row.maxTokensPerRequest || 0),
+    expiresAt: row.expiresAt || null,
+    allowedModels: parseJson(row.allowedModels, []),
+    allowedIps: parseJson(row.allowedIps, []),
+    rtkMode: row.rtkMode || "inherit",
+    cavemanMode: row.cavemanMode || "inherit",
+    paygEnabled: row.paygEnabled === 1 || row.paygEnabled === true,
+    customerId: row.customerId || null,
+    orderId: row.orderId || null,
+    createdAt: row.createdAt,
+    walletBalance: Number(row._walletBalance || 0),
+    walletMinLimit: Number(row._walletMinLimit || 0),
+  };
+}
+
+/**
+ * Returns true when this key has any quota cap configured (daily/monthly/lifetime).
+ */
+function hasAnyQuotaCap(apiKeyRecord) {
+  return (
+    Number(apiKeyRecord?.dailyTokenLimit || 0) > 0 ||
+    Number(apiKeyRecord?.monthlyTokenLimit || 0) > 0 ||
+    Number(apiKeyRecord?.lifetimeTokenLimit || 0) > 0
+  );
+}
+
+/**
+ * Returns true if the wallet has spendable balance after subtracting in-flight
+ * micro-VND reservations.
+ */
+export function hasWalletHeadroom(apiKeyRecord) {
+  if (!apiKeyRecord || !apiKeyRecord.paygEnabled) return false;
+  const reserved = getReservedWalletMicroVnd(apiKeyRecord.id);
+  return Number(apiKeyRecord.walletBalance || 0) - reserved > Number(apiKeyRecord.walletMinLimit || 0);
 }
 
 export function checkApiKeyExpiry(apiKeyRecord, now = new Date()) {

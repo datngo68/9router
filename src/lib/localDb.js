@@ -26,7 +26,7 @@ export {
   revokeCustomerSession, revokeAllSessionsForCustomer, pruneExpiredSessions,
   getPricingPlans, getPricingPlanById, createPricingPlan,
   updatePricingPlan, deletePricingPlan, planToApiKeyPolicy,
-  createOrder, getOrderById, getOrders,
+  createOrder, createTopupOrder, getOrderById, getOrders,
   cancelOrder, markOrderRefunded, confirmOrderAtomic,
   attachApibankOrder, findOrderByApibankRef,
   exportDb, importDb,

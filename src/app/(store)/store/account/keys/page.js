@@ -151,6 +151,32 @@ export default function AccountKeysPage() {
                   {k.allowedModels?.length > 0 && <span>{k.allowedModels.length} model</span>}
                   {k.expiresAt && <span>Hết hạn: {new Date(k.expiresAt).toLocaleDateString("vi-VN")}</span>}
                 </div>
+
+                <div className="mt-3 flex items-center justify-between rounded-lg border border-border-subtle bg-surface-2 px-3 py-2">
+                  <div className="text-xs">
+                    <p className="font-medium">Trả thêm bằng ví khi hết quota</p>
+                    <p className="text-text-muted">Khi quota gói hết, request tiếp theo sẽ trừ tiền từ ví VND.</p>
+                  </div>
+                  <label className="inline-flex items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={!!k.paygEnabled}
+                      disabled={busy === k.id}
+                      onChange={async () => {
+                        setBusy(k.id);
+                        try {
+                          await fetch(`/api/account/keys/${k.id}`, {
+                            method: "PATCH",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ paygEnabled: !k.paygEnabled }),
+                          });
+                          await load();
+                        } finally { setBusy(null); }
+                      }}
+                    />
+                    <span>{k.paygEnabled ? "Bật" : "Tắt"}</span>
+                  </label>
+                </div>
               </div>
             );
           })}

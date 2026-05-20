@@ -28,6 +28,7 @@ import {
   checkApiKeyMaxTokensPerRequest,
   checkApiKeyModelAccess,
   checkApiKeyComboModelAccess,
+  hasWalletHeadroom,
 } from "../services/apiKeyPolicy.js";
 import {
   estimateRequestTokens,
@@ -116,6 +117,7 @@ export async function handleChat(request, clientRawRequest = null, options = {})
   const settings = await getSettings();
   let apiKeyRecord = null;
   let reservationId = null;
+  let chargeFromWallet = false;
   // Loopback CLI bypass: requests originating from this host (model test
   // endpoints, MCP bridge, etc.) carry x-9r-cli-token derived from the
   // machine ID. Skip requireApiKey for those — quota/policy checks below
@@ -154,36 +156,51 @@ export async function handleChat(request, clientRawRequest = null, options = {})
         return errorResponse(HTTP_STATUS.FORBIDDEN, "API key is not allowed from this IP address");
       }
     }
+    // Quota checks. Run all 3 (daily/monthly/lifetime) and remember the
+    // first failure. If `paygEnabled` is on AND the wallet has headroom we
+    // override the failure and bill from wallet instead.
     const quotaCheck = await checkApiKeyDailyTokenLimit(apiKeyRecord);
-    if (!quotaCheck.allowed) {
-      log.warn("AUTH", quotaCheck.message);
-      const response = errorResponse(quotaCheck.status, quotaCheck.message);
-      response.headers.set("X-Api-Key-Token-Limit", String(quotaCheck.limit));
-      response.headers.set("X-Api-Key-Token-Used", String(quotaCheck.usage.totalTokens));
-      response.headers.set("X-Api-Key-Token-Remaining", String(quotaCheck.remaining));
-      response.headers.set("X-Api-Key-Token-Reset", quotaCheck.resetAt);
-      return response;
-    }
+    const monthCheck = quotaCheck.allowed ? await checkApiKeyMonthlyTokenLimit(apiKeyRecord) : { allowed: true };
+    const lifeCheck = quotaCheck.allowed && monthCheck.allowed ? await checkApiKeyLifetimeTokenLimit(apiKeyRecord) : { allowed: true };
+    const failedCheck = !quotaCheck.allowed ? quotaCheck : !monthCheck.allowed ? monthCheck : !lifeCheck.allowed ? lifeCheck : null;
 
-    // Monthly cap (resets first day of next local month).
-    const monthCheck = await checkApiKeyMonthlyTokenLimit(apiKeyRecord);
-    if (!monthCheck.allowed) {
-      log.warn("AUTH", monthCheck.message);
-      const response = errorResponse(monthCheck.status, monthCheck.message);
-      response.headers.set("X-Api-Key-Month-Limit", String(monthCheck.limit));
-      response.headers.set("X-Api-Key-Month-Used", String(monthCheck.usage.totalTokens));
-      response.headers.set("X-Api-Key-Month-Reset", monthCheck.resetAt);
-      return response;
-    }
-
-    // Lifetime cap (never resets — for prepaid token packs).
-    const lifeCheck = await checkApiKeyLifetimeTokenLimit(apiKeyRecord);
-    if (!lifeCheck.allowed) {
-      log.warn("AUTH", lifeCheck.message);
-      const response = errorResponse(lifeCheck.status, lifeCheck.message);
-      response.headers.set("X-Api-Key-Lifetime-Limit", String(lifeCheck.limit));
-      response.headers.set("X-Api-Key-Lifetime-Used", String(lifeCheck.usage.totalTokens));
-      return response;
+    if (failedCheck) {
+      // PAYG fallback: only when the wallet has headroom AND a customer is
+      // attached (key without customerId can't bill anywhere).
+      const canFallback =
+        settings.walletEnabled !== false &&
+        apiKeyRecord.customerId &&
+        hasWalletHeadroom(apiKeyRecord);
+      if (canFallback) {
+        chargeFromWallet = true;
+      } else {
+        // If wallet is opted-in but balance ran out, surface a one-shot
+        // notification so the customer can refill quickly.
+        if (apiKeyRecord.paygEnabled && apiKeyRecord.customerId && settings.walletEnabled !== false) {
+          import("@/lib/notifications/walletEvents.js")
+            .then((m) => m.notifyPaygChargeFailed(
+              { id: apiKeyRecord.customerId },
+              { reason: "Số dư ví không đủ", model: modelStr }
+            ))
+            .catch(() => {});
+        }
+        log.warn("AUTH", failedCheck.message);
+        const response = errorResponse(failedCheck.status, failedCheck.message);
+        if (failedCheck === quotaCheck) {
+          response.headers.set("X-Api-Key-Token-Limit", String(quotaCheck.limit));
+          response.headers.set("X-Api-Key-Token-Used", String(quotaCheck.usage.totalTokens));
+          response.headers.set("X-Api-Key-Token-Remaining", String(quotaCheck.remaining));
+          response.headers.set("X-Api-Key-Token-Reset", quotaCheck.resetAt);
+        } else if (failedCheck === monthCheck) {
+          response.headers.set("X-Api-Key-Month-Limit", String(monthCheck.limit));
+          response.headers.set("X-Api-Key-Month-Used", String(monthCheck.usage.totalTokens));
+          response.headers.set("X-Api-Key-Month-Reset", monthCheck.resetAt);
+        } else {
+          response.headers.set("X-Api-Key-Lifetime-Limit", String(lifeCheck.limit));
+          response.headers.set("X-Api-Key-Lifetime-Used", String(lifeCheck.usage.totalTokens));
+        }
+        return response;
+      }
     }
 
     // Per-key requests-per-minute throttle. Sliding 60s window in RAM.
@@ -218,12 +235,20 @@ export async function handleChat(request, clientRawRequest = null, options = {})
 
     // Reserve estimated tokens so concurrent requests see in-flight usage
     // when checking the daily/monthly/lifetime limits. Released when the
-    // response stream ends.
+    // response stream ends. When billing wallet we also reserve a rough
+    // upper-bound micro-VND so concurrent wallet requests don't all see the
+    // same pre-debit balance and collectively overdraft.
     const hasAnyLimit = (apiKeyRecord?.dailyTokenLimit || 0) > 0
       || (apiKeyRecord?.monthlyTokenLimit || 0) > 0
       || (apiKeyRecord?.lifetimeTokenLimit || 0) > 0;
-    if (hasAnyLimit) {
-      reservationId = reserveTokens(apiKeyRecord.id, estimateRequestTokens(body));
+    if (hasAnyLimit || chargeFromWallet) {
+      const tokenEstimate = hasAnyLimit ? estimateRequestTokens(body) : 0;
+      // Conservative upper bound: assume 100 VND/1k tokens (≈4 USD/1M tokens
+      // at 25k VND/USD with markup). The exact rate is resolved post-response.
+      const walletEstimateMicroVnd = chargeFromWallet
+        ? Math.max(100_000_000, estimateRequestTokens(body) * 100_000) // 100 VND = 100M micro
+        : 0;
+      reservationId = reserveTokens(apiKeyRecord.id, tokenEstimate, walletEstimateMicroVnd);
     }
   }
 

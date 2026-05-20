@@ -146,9 +146,12 @@ export default function AdminOrdersPage() {
               <tbody>
                 {orders.map((o) => (
                   <tr key={o.id} className="border-t border-border-subtle">
-                    <td className="px-3 py-2 font-mono text-xs">{o.id}</td>
+                    <td className="px-3 py-2 font-mono text-xs">
+                      {o.id}
+                      {o.kind === "walletTopup" && <span className="ml-2 rounded-full bg-purple-500/10 px-2 py-0.5 text-[10px] text-purple-500">Top-up</span>}
+                    </td>
                     <td className="px-3 py-2 text-xs text-text-muted">{o.customerId.slice(0, 8)}...</td>
-                    <td className="px-3 py-2 text-xs">{o.planId.slice(0, 8)}...</td>
+                    <td className="px-3 py-2 text-xs">{o.planId ? `${o.planId.slice(0, 8)}...` : <span className="text-text-muted">—</span>}</td>
                     <td className="px-3 py-2 text-right">
                       {o.discountVnd > 0 ? (
                         <div className="flex flex-col items-end leading-tight">

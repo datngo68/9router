@@ -17,6 +17,7 @@ const TABS = [
   { id: "overview", label: "Tổng quan" },
   { id: "orders", label: "Đơn hàng" },
   { id: "usage", label: "Usage" },
+  { id: "wallet", label: "Ví" },
   { id: "voucher", label: "Voucher" },
   { id: "keys", label: "API keys" },
   { id: "actions", label: "Hành động" },
@@ -111,6 +112,7 @@ export default function AdminCustomerDetailPage() {
       {tab === "orders" && <OrdersTab orders={orders} />}
       {tab === "usage" && <UsageTab usageDaily={usageDaily} usageByModel={usageByModel} keyLimitsUsage={keyLimitsUsage} />}
       {tab === "voucher" && <VoucherTab redemptions={voucherRedemptions} />}
+      {tab === "wallet" && <WalletTab customerId={id} notify={notify} />}
       {tab === "keys" && (
         <KeysTab
           keys={keys}
@@ -399,6 +401,160 @@ function UsageBar({ label, used, limit, pct }) {
       <div className="h-1.5 w-full rounded bg-surface-2">
         <div className={`h-full rounded ${color}`} style={{ width: `${showPct ? pct : 0}%` }} />
       </div>
+    </div>
+  );
+}
+
+function WalletTab({ customerId, notify }) {
+  const [data, setData] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [adjustForm, setAdjustForm] = useState({ deltaVnd: "", reason: "", type: "adjustment" });
+  const [minLimitInput, setMinLimitInput] = useState("");
+
+  async function load() {
+    const r = await fetch(`/api/admin/customers/${customerId}/wallet`, { cache: "no-store" });
+    const d = await r.json();
+    setData(d);
+    setMinLimitInput(String(d?.balance?.minLimitVnd || 0));
+  }
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [customerId]);
+
+  async function adjust() {
+    if (!adjustForm.deltaVnd || !adjustForm.reason.trim()) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/admin/customers/${customerId}/wallet`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          deltaVnd: Number(adjustForm.deltaVnd),
+          reason: adjustForm.reason.trim(),
+          type: adjustForm.type,
+        }),
+      });
+      const d = await res.json();
+      if (!res.ok) { notify(d?.error || "Điều chỉnh thất bại"); return; }
+      notify("Đã ghi điều chỉnh ví.");
+      setAdjustForm({ deltaVnd: "", reason: "", type: "adjustment" });
+      await load();
+    } finally { setBusy(false); }
+  }
+
+  async function saveMinLimit() {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/admin/customers/${customerId}/wallet`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ minLimitVnd: Number(minLimitInput) || 0 }),
+      });
+      const d = await res.json();
+      if (!res.ok) { notify(d?.error || "Lưu thất bại"); return; }
+      notify("Đã cập nhật mức tối thiểu.");
+      await load();
+    } finally { setBusy(false); }
+  }
+
+  if (!data) return <Card><p className="text-text-muted">Đang tải ví…</p></Card>;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Card>
+        <div className="grid gap-4 sm:grid-cols-3">
+          <div>
+            <p className="text-xs uppercase text-text-muted">Số dư hiện tại</p>
+            <p className="mt-1 text-2xl font-semibold">{fmtVnd(data.balance?.vnd || 0)}</p>
+          </div>
+          <div>
+            <p className="text-xs uppercase text-text-muted">Hạn mức tối thiểu</p>
+            <p className="mt-1 text-lg">{fmtVnd(data.balance?.minLimitVnd || 0)}</p>
+          </div>
+          <div>
+            <p className="text-xs uppercase text-text-muted">Tổng giao dịch</p>
+            <p className="mt-1 text-lg">{fmtNum(data.total)}</p>
+          </div>
+        </div>
+      </Card>
+
+      <Card>
+        <h2 className="font-semibold mb-3">Điều chỉnh thủ công</h2>
+        <div className="grid gap-3 sm:grid-cols-4">
+          <Input
+            type="number"
+            placeholder="Số tiền (VND, âm để trừ)"
+            value={adjustForm.deltaVnd}
+            onChange={(e) => setAdjustForm({ ...adjustForm, deltaVnd: e.target.value })}
+          />
+          <select
+            value={adjustForm.type}
+            onChange={(e) => setAdjustForm({ ...adjustForm, type: e.target.value })}
+            className="rounded-lg border border-border bg-bg px-3 py-2 text-sm"
+          >
+            <option value="adjustment">Điều chỉnh</option>
+            <option value="refund">Hoàn tiền</option>
+          </select>
+          <Input
+            placeholder="Lý do (bắt buộc)"
+            value={adjustForm.reason}
+            onChange={(e) => setAdjustForm({ ...adjustForm, reason: e.target.value })}
+          />
+          <Button onClick={adjust} disabled={busy || !adjustForm.deltaVnd || !adjustForm.reason.trim()}>
+            Lưu
+          </Button>
+        </div>
+      </Card>
+
+      <Card>
+        <h2 className="font-semibold mb-3">Hạn mức overdraft</h2>
+        <p className="text-xs text-text-muted mb-3">Số âm cho phép khách dùng quá số dư tới mức đó.</p>
+        <div className="flex gap-2">
+          <Input
+            type="number"
+            value={minLimitInput}
+            onChange={(e) => setMinLimitInput(e.target.value)}
+            placeholder="VND"
+          />
+          <Button onClick={saveMinLimit} disabled={busy}>Lưu</Button>
+        </div>
+      </Card>
+
+      <Card>
+        <h2 className="font-semibold mb-3">Lịch sử giao dịch ({fmtNum(data.total)})</h2>
+        {data.items.length === 0 ? (
+          <p className="text-sm text-text-muted py-4 text-center">Chưa có giao dịch.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="text-xs text-text-muted">
+                <tr className="border-b border-border-subtle">
+                  <th className="px-2 py-2 text-left">Thời gian</th>
+                  <th className="px-2 py-2 text-left">Loại</th>
+                  <th className="px-2 py-2 text-right">Delta</th>
+                  <th className="px-2 py-2 text-right">Số dư sau</th>
+                  <th className="px-2 py-2 text-left">Tham chiếu</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.items.map((tx) => (
+                  <tr key={tx.id} className="border-b border-border-subtle/50">
+                    <td className="px-2 py-2 text-text-muted">{fmtTime(tx.createdAt)}</td>
+                    <td className="px-2 py-2">{tx.type}</td>
+                    <td className={`px-2 py-2 text-right font-mono ${tx.delta > 0 ? "text-green-600" : "text-red-500"}`}>
+                      {tx.delta > 0 ? "+" : ""}{fmtVnd(tx.deltaVnd)}
+                    </td>
+                    <td className="px-2 py-2 text-right font-mono">{fmtVnd(tx.balanceAfterVnd)}</td>
+                    <td className="px-2 py-2 text-text-muted text-xs">
+                      {tx.refType === "order" && tx.refId && <Link href={`/dashboard/orders/${tx.refId}`} className="hover:text-primary">order {tx.refId}</Link>}
+                      {tx.model && <span> · {tx.model}</span>}
+                      {tx.meta?.reason && <span> · {tx.meta.reason}</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
     </div>
   );
 }

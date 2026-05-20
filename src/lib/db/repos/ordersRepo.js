@@ -29,6 +29,7 @@ function rowToOrder(row) {
     id: row.id,
     customerId: row.customerId,
     planId: row.planId,
+    kind: row.kind || "plan",
     status: row.status,
     priceVnd: Number(row.priceVnd || 0),
     originalPriceVnd: row.originalPriceVnd != null ? Number(row.originalPriceVnd) : Number(row.priceVnd || 0),
@@ -86,7 +87,7 @@ export async function createOrder({ customerId, planId, paymentMethod = "bank", 
 
   db.transaction(() => {
     db.run(
-      `INSERT INTO orders(id, customerId, planId, status, priceVnd, originalPriceVnd, discountVnd, voucherId, voucherCode, paymentMethod, notes, createdAt) VALUES(?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO orders(id, customerId, planId, kind, status, priceVnd, originalPriceVnd, discountVnd, voucherId, voucherCode, paymentMethod, notes, createdAt) VALUES(?, ?, ?, 'plan', 'pending', ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         customerId,
@@ -113,6 +114,26 @@ export async function createOrder({ customerId, planId, paymentMethod = "bank", 
       });
     }
   });
+  return getOrderById(id);
+}
+
+/**
+ * Create a wallet top-up order. No plan, no voucher — just a customer
+ * crediting their PAYG balance. The webhook handler detects `kind = 'walletTopup'`
+ * and credits the wallet instead of creating an apiKey.
+ */
+export async function createTopupOrder({ customerId, amountVnd, paymentMethod = "bank", notes = null }) {
+  if (!customerId) throw new Error("customerId is required");
+  const amount = Math.trunc(Number(amountVnd) || 0);
+  if (amount <= 0) throw new Error("amountVnd must be positive");
+
+  const db = await getAdapter();
+  const id = `9W-${shortRef()}`;
+  const now = new Date().toISOString();
+  db.run(
+    `INSERT INTO orders(id, customerId, planId, kind, status, priceVnd, originalPriceVnd, discountVnd, paymentMethod, notes, createdAt) VALUES(?, ?, NULL, 'walletTopup', 'pending', ?, ?, 0, ?, ?, ?)`,
+    [id, customerId, amount, amount, paymentMethod, notes, now]
+  );
   return getOrderById(id);
 }
 
@@ -219,17 +240,61 @@ export async function markOrderRefunded(id, { notes = null } = {}) {
  * Idempotent: if the order is already delivered, returns the existing apiKey.
  */
 export async function confirmOrderAtomic({ orderId, paymentRef = null, machineId, actorIp = null }) {
-  if (!machineId) throw new Error("machineId is required");
   const db = await getAdapter();
 
   const order = await getOrderById(orderId);
   if (!order) throw new Error("order not found");
-  if (order.status === "delivered" && order.apiKeyId) {
-    // Already delivered — surface a stub view-once placeholder so callers don't
-    // accidentally treat this as a brand-new key. Raw key is unrecoverable.
-    return { order, apiKey: { id: order.apiKeyId, key: null, alreadyDelivered: true } };
+  if (order.status === "delivered") {
+    if (order.kind === "walletTopup") {
+      return { order, walletTopup: { alreadyDelivered: true, amountVnd: order.priceVnd } };
+    }
+    if (order.apiKeyId) {
+      // Already delivered — surface a stub view-once placeholder so callers don't
+      // accidentally treat this as a brand-new key. Raw key is unrecoverable.
+      return { order, apiKey: { id: order.apiKeyId, key: null, alreadyDelivered: true } };
+    }
   }
   if (order.status !== "pending") throw new Error(`cannot confirm order in status ${order.status}`);
+
+  // ── Wallet top-up branch: credit the customer's wallet, no apiKey created.
+  if (order.kind === "walletTopup") {
+    const now = new Date().toISOString();
+    const microVnd = Math.trunc(Number(order.priceVnd || 0) * 1_000_000);
+    if (microVnd <= 0) throw new Error("topup amount must be positive");
+
+    const { v4 } = await import("uuid");
+    db.transaction(() => {
+      const cur = db.get(`SELECT balance FROM customers WHERE id = ?`, [order.customerId]);
+      if (!cur) throw new Error("customer not found");
+      const balanceAfter = Number(cur.balance || 0) + microVnd;
+      db.run(`UPDATE customers SET balance = ?, updatedAt = ? WHERE id = ?`, [balanceAfter, now, order.customerId]);
+      db.run(
+        `INSERT INTO walletTransactions(id, customerId, apiKeyId, delta, balanceAfter, type, refType, refId, provider, model, promptTokens, completionTokens, meta, createdAt)
+         VALUES(?, ?, NULL, ?, ?, 'topup', 'order', ?, NULL, NULL, 0, 0, ?, ?)`,
+        [
+          v4(),
+          order.customerId,
+          microVnd,
+          balanceAfter,
+          order.id,
+          JSON.stringify({ paymentRef, amountVnd: order.priceVnd }),
+          now,
+        ]
+      );
+      db.run(
+        `UPDATE orders SET status = 'delivered', paymentRef = COALESCE(?, paymentRef), paidAt = COALESCE(paidAt, ?), deliveredAt = ? WHERE id = ?`,
+        [paymentRef, now, now, order.id]
+      );
+    });
+
+    return {
+      order: await getOrderById(order.id),
+      walletTopup: { amountVnd: order.priceVnd, microVnd },
+    };
+  }
+
+  // ── Plan branch: create apiKey from plan policy.
+  if (!machineId) throw new Error("machineId is required");
 
   const plan = await getPricingPlanById(order.planId);
   if (!plan) throw new Error("plan no longer exists");

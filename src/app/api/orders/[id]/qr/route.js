@@ -39,11 +39,14 @@ export async function GET(request, { params }) {
     settings?.apibankBankAccountId
   ) {
     try {
-      const plan = await getPricingPlanById(order.planId);
+      const plan = order.kind === "walletTopup" ? null : await getPricingPlanById(order.planId);
+      const description = order.kind === "walletTopup"
+        ? `Wallet topup · ${order.id}`
+        : `${plan?.name || "Order"} · ${order.id}`;
       const ab = await createApibankOrder({
         routerOrderId: order.id,
         amountVnd: order.priceVnd,
-        description: `${plan?.name || "Order"} · ${order.id}`,
+        description,
         ttlSeconds: 900,
       });
       if (ab?.id && ab?.code) {

@@ -1,4 +1,5 @@
 import { EventEmitter } from "events";
+import { v4 as walletUuid } from "uuid";
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 import { getMeta, setMeta } from "../helpers/metaStore.js";
@@ -264,8 +265,43 @@ export async function saveRequestUsage(entry) {
     const tokens = entry.tokens || {};
     const { promptTokens, completionTokens } = normalizeUsageTokens(tokens);
 
-    // All 3 writes (history insert, daily upsert, lifetime counter) in ONE transaction.
-    // better-sqlite3 is sync → no JS yield mid-transaction → no race in same process.
+    // PAYG: resolve VND cost BEFORE opening the transaction so we can fail
+    // fast on missing pricing without leaving a half-written history row.
+    let walletDebit = null;
+    if (entry.chargeFromWallet && entry.customerId) {
+      try {
+        const { calculatePaygCostMicroVnd } = await import("./paygPricingRepo.js");
+        const { getSettings } = await import("./settingsRepo.js");
+        const settings = await getSettings();
+        const minChargeVnd = Number(settings.paygMinChargeVnd || 1);
+        const computed = await calculatePaygCostMicroVnd({
+          provider: entry.provider,
+          model: entry.model,
+          tokens,
+          minChargeVnd,
+        });
+        if (computed.microVnd != null && computed.microVnd > 0) {
+          walletDebit = {
+            microVnd: computed.microVnd,
+            customerId: entry.customerId,
+            apiKeyId: entry.apiKeyId,
+            provider: entry.provider,
+            model: entry.model,
+            promptTokens,
+            completionTokens,
+          };
+        } else if (computed.pricing == null) {
+          console.warn(`[usageRepo] PAYG pricing not configured for ${entry.provider}/${entry.model} — wallet not charged`);
+        }
+      } catch (e) {
+        console.error("[usageRepo] PAYG cost computation failed:", e.message);
+      }
+    }
+
+    // All writes (history insert, daily upsert, lifetime counter, optional
+    // wallet debit + ledger) in ONE transaction. better-sqlite3 is sync →
+    // no JS yield mid-transaction → no race in same process.
+    let walletResult = null;
     db.transaction(() => {
       db.run(
         `INSERT INTO usageHistory(timestamp, provider, model, connectionId, apiKey, apiKeyId, endpoint, promptTokens, completionTokens, cost, status, tokens, meta) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -278,7 +314,7 @@ export async function saveRequestUsage(entry) {
           entry.apiKeyId || null,
           entry.endpoint || null,
           promptTokens, completionTokens, entry.cost || 0, entry.status || "ok",
-          stringifyJson(tokens), stringifyJson({}),
+          stringifyJson(tokens), stringifyJson(entry.chargeFromWallet ? { chargeFromWallet: true } : {}),
         ]
       );
 
@@ -295,10 +331,49 @@ export async function saveRequestUsage(entry) {
       const cur = db.get(`SELECT value FROM _meta WHERE key = 'totalRequestsLifetime'`);
       const next = (cur ? parseInt(cur.value, 10) : 0) + 1;
       db.run(`INSERT INTO _meta(key, value) VALUES('totalRequestsLifetime', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(next)]);
+
+      // Wallet debit + ledger inside the same transaction so usage and
+      // billing commit atomically. Skipped silently when no debit was
+      // computed (no pricing configured, no tokens, etc.).
+      if (walletDebit) {
+        // Inline the applyWalletDeltaInTxn logic to avoid the dynamic import
+        // cost inside the txn (better-sqlite3 sync execution).
+        const customer = db.get(`SELECT balance FROM customers WHERE id = ?`, [walletDebit.customerId]);
+        if (customer) {
+          const balanceAfter = Number(customer.balance || 0) - walletDebit.microVnd;
+          db.run(`UPDATE customers SET balance = ?, updatedAt = ? WHERE id = ?`, [
+            balanceAfter,
+            new Date().toISOString(),
+            walletDebit.customerId,
+          ]);
+          db.run(
+            `INSERT INTO walletTransactions(id, customerId, apiKeyId, delta, balanceAfter, type, refType, refId, provider, model, promptTokens, completionTokens, meta, createdAt)
+             VALUES(?, ?, ?, ?, ?, 'charge', 'usage', ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              walletUuid(),
+              walletDebit.customerId,
+              walletDebit.apiKeyId || null,
+              -walletDebit.microVnd,
+              balanceAfter,
+              entry.timestamp,
+              walletDebit.provider || null,
+              walletDebit.model || null,
+              walletDebit.promptTokens,
+              walletDebit.completionTokens,
+              stringifyJson({ costUsd: entry.cost }),
+              new Date().toISOString(),
+            ]
+          );
+          walletResult = { microVnd: walletDebit.microVnd, balanceAfter };
+        }
+      }
     });
 
     pushToRing(entry);
     statsEmitter.emit("update");
+    if (walletResult) {
+      statsEmitter.emit("wallet", { customerId: entry.customerId, ...walletResult });
+    }
   } catch (e) {
     console.error("Failed to save usage stats:", e);
   }

@@ -57,6 +57,15 @@ const APIBANK_FIELDS = [
   { key: "apibankApiKey", label: "API key", type: "password", placeholder: "sk_live_...", hint: "Tạo trong APIBank · Settings → API Keys, scope orders:write + orders:read + bank_accounts:read." },
 ];
 
+const WALLET_FIELDS = [
+  { key: "walletTopupMinVnd", label: "Số tiền nạp tối thiểu (VND)", type: "number", placeholder: "10000" },
+  { key: "walletTopupMaxVnd", label: "Số tiền nạp tối đa (VND)", type: "number", placeholder: "10000000" },
+  { key: "walletLowBalanceThresholdVnd", label: "Ngưỡng cảnh báo số dư thấp (VND)", type: "number", placeholder: "10000", hint: "Khi balance dưới ngưỡng này, gửi notification cho khách." },
+  { key: "paygMinChargeVnd", label: "Mức trừ tối thiểu mỗi request (VND)", type: "number", placeholder: "1", hint: "Tránh trừ 0 VND khi token quá ít. Mỗi request có usage > 0 sẽ trừ tối thiểu khoản này." },
+  { key: "paygMarkupMultiplier", label: "Hệ số markup (gợi ý giá)", type: "number", placeholder: "1.5", hint: "Chỉ dùng cho nút 'Suggest from cost basis' bên trang PAYG Pricing. Không lưu vào logic charge." },
+  { key: "paygFxVndPerUsd", label: "Tỷ giá USD→VND (gợi ý giá)", type: "number", placeholder: "26000", hint: "Chỉ dùng cho UI gợi ý giá PAYG từ pricing.js." },
+];
+
 export default function StoreSettingsPage() {
   const [settings, setSettings] = useState({});
   const [banks, setBanks] = useState([]);
@@ -476,6 +485,30 @@ export default function StoreSettingsPage() {
           {settings.apibankConfigured && !apibankTest && (
             <span className="text-xs text-text-muted">Đã cấu hình đầy đủ.</span>
           )}
+        </div>
+      </Card>
+
+      <Card>
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h2 className="font-semibold">Wallet & Pay-as-you-go</h2>
+            <p className="text-xs text-text-muted">Cho phép khách nạp ví VND và trả thêm khi quota gói hết. Cấu hình bảng giá riêng tại <a href="/dashboard/payg-pricing" className="text-primary hover:underline">PAYG Pricing</a>.</p>
+          </div>
+          <Toggle checked={!!settings.walletEnabled} onChange={(v) => setSettings({ ...settings, walletEnabled: v })} size="sm" />
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {WALLET_FIELDS.map((f) => field(f))}
+        </div>
+        <div className="mt-4 flex gap-3">
+          <Button onClick={() => save({
+            walletEnabled: !!settings.walletEnabled,
+            walletTopupMinVnd: Number(settings.walletTopupMinVnd) || 0,
+            walletTopupMaxVnd: Number(settings.walletTopupMaxVnd) || 0,
+            walletLowBalanceThresholdVnd: Number(settings.walletLowBalanceThresholdVnd) || 0,
+            paygMinChargeVnd: Number(settings.paygMinChargeVnd) || 0,
+            paygMarkupMultiplier: Number(settings.paygMarkupMultiplier) || 1,
+            paygFxVndPerUsd: Number(settings.paygFxVndPerUsd) || 0,
+          })} disabled={busy}>Lưu Wallet & PAYG</Button>
         </div>
       </Card>
 

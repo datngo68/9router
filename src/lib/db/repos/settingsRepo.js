@@ -81,6 +81,14 @@ const DEFAULT_SETTINGS = {
   apibankApiKey: "",
   apibankBankAccountId: "",
   apibankWebhookSecret: "",
+  // Wallet & PAYG — pay-as-you-go fallback billing
+  walletEnabled: false,
+  walletTopupMinVnd: 10000,
+  walletTopupMaxVnd: 10000000,
+  walletLowBalanceThresholdVnd: 10000,
+  paygMinChargeVnd: 1,
+  paygMarkupMultiplier: 1.5,
+  paygFxVndPerUsd: 26000,
 };
 
 async function readRaw() {

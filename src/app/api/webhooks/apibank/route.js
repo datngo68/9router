@@ -147,10 +147,10 @@ export async function POST(request) {
     return NextResponse.json({ error: `order in status ${order.status}` }, { status: 409 });
   }
 
-  // ── Confirm order + provision key ─────────────────────────────────────
+  // ── Confirm order + provision key/wallet ─────────────────────────────
   let result;
   try {
-    const machineId = await getConsistentMachineId();
+    const machineId = order.kind === "walletTopup" ? null : await getConsistentMachineId();
     result = await confirmOrderAtomic({
       orderId: order.id,
       paymentRef,
@@ -169,8 +169,31 @@ export async function POST(request) {
   (async () => {
     try {
       const customer = await getCustomerById(result.order.customerId);
+      const portalUrl = await resolvePublicUrl(
+        result.order.kind === "walletTopup" ? "/store/account/wallet" : "/store/account/keys"
+      );
+
+      if (result.order.kind === "walletTopup" && result.walletTopup) {
+        // Wallet top-up confirmation notification.
+        await createNotification({
+          customerId: customer?.id,
+          title: "Nạp ví thành công",
+          body: `Đã cộng ${Number(result.walletTopup.amountVnd || 0).toLocaleString("vi-VN")} VND vào ví của bạn.`,
+          type: "success",
+          link: portalUrl,
+          channels: ["inapp"],
+          createdBy: "system",
+        }).catch(() => {});
+        await notifyCustomerCustom({
+          customer,
+          title: "Nạp ví thành công",
+          body: `Đã cộng ${Number(result.walletTopup.amountVnd || 0).toLocaleString("vi-VN")} VND vào ví. Xem chi tiết tại ${portalUrl}.`,
+          link: portalUrl,
+        }).catch(() => {});
+        return;
+      }
+
       const plan = await getPricingPlanById(result.order.planId);
-      const portalUrl = await resolvePublicUrl("/store/account/keys");
       if (result.apiKey?.key) {
         await sendKeyDeliveredEmail({
           email: customer?.email,

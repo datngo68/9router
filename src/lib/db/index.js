@@ -60,7 +60,7 @@ export {
 
 // Storefront — orders
 export {
-  createOrder, getOrderById, getOrders,
+  createOrder, createTopupOrder, getOrderById, getOrders,
   cancelOrder, markOrderRefunded, confirmOrderAtomic,
   attachApibankOrder, findOrderByApibankRef,
   countCustomerPlanPurchases,

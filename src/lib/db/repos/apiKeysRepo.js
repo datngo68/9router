@@ -67,6 +67,7 @@ export function normalizeApiKeyPolicy(data = {}) {
     allowedIps: normalizeAllowedIps(data.allowedIps),
     rtkMode: normalizeRtkMode(data.rtkMode),
     cavemanMode: normalizeCavemanMode(data.cavemanMode),
+    paygEnabled: !!data.paygEnabled,
   };
 }
 
@@ -109,6 +110,7 @@ function rowToKey(row) {
     allowedIps: normalizeAllowedIps(row.allowedIps),
     rtkMode: normalizeRtkMode(row.rtkMode),
     cavemanMode: normalizeCavemanMode(row.cavemanMode),
+    paygEnabled: row.paygEnabled === 1 || row.paygEnabled === true,
     customerId: row.customerId || null,
     orderId: row.orderId || null,
     createdAt: row.createdAt,
@@ -168,7 +170,7 @@ export async function createApiKey(name, machineId, options = {}) {
     createdAt: new Date().toISOString(),
   };
   db.run(
-    `INSERT INTO apiKeys(id, key, keyHash, keyPrefix, keyLast4, name, machineId, isActive, dailyTokenLimit, monthlyTokenLimit, lifetimeTokenLimit, requestsPerMinute, maxTokensPerRequest, expiresAt, allowedModels, allowedIps, rtkMode, cavemanMode, createdAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO apiKeys(id, key, keyHash, keyPrefix, keyLast4, name, machineId, isActive, dailyTokenLimit, monthlyTokenLimit, lifetimeTokenLimit, requestsPerMinute, maxTokensPerRequest, expiresAt, allowedModels, allowedIps, rtkMode, cavemanMode, paygEnabled, createdAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       apiKey.id,
       null, // never persist plaintext
@@ -188,6 +190,7 @@ export async function createApiKey(name, machineId, options = {}) {
       stringifyJson(apiKey.allowedIps),
       apiKey.rtkMode,
       apiKey.cavemanMode,
+      apiKey.paygEnabled ? 1 : 0,
       apiKey.createdAt,
     ]
   );
@@ -228,9 +231,12 @@ export async function updateApiKey(id, data) {
     if (Object.prototype.hasOwnProperty.call(data, "cavemanMode")) {
       policyPatch.cavemanMode = normalizeCavemanMode(data.cavemanMode);
     }
+    if (Object.prototype.hasOwnProperty.call(data, "paygEnabled")) {
+      policyPatch.paygEnabled = !!data.paygEnabled;
+    }
     const merged = { ...existing, ...data, ...policyPatch };
     db.run(
-      `UPDATE apiKeys SET name = ?, machineId = ?, isActive = ?, dailyTokenLimit = ?, monthlyTokenLimit = ?, lifetimeTokenLimit = ?, requestsPerMinute = ?, maxTokensPerRequest = ?, expiresAt = ?, allowedModels = ?, allowedIps = ?, rtkMode = ?, cavemanMode = ? WHERE id = ?`,
+      `UPDATE apiKeys SET name = ?, machineId = ?, isActive = ?, dailyTokenLimit = ?, monthlyTokenLimit = ?, lifetimeTokenLimit = ?, requestsPerMinute = ?, maxTokensPerRequest = ?, expiresAt = ?, allowedModels = ?, allowedIps = ?, rtkMode = ?, cavemanMode = ?, paygEnabled = ? WHERE id = ?`,
       [
         merged.name,
         merged.machineId,
@@ -245,6 +251,7 @@ export async function updateApiKey(id, data) {
         stringifyJson(merged.allowedIps),
         merged.rtkMode,
         merged.cavemanMode,
+        merged.paygEnabled ? 1 : 0,
         id,
       ]
     );
@@ -407,9 +414,12 @@ export async function bulkUpdateApiKeys(ids, patch) {
       if (Object.prototype.hasOwnProperty.call(patch, "cavemanMode")) {
         policyPatch.cavemanMode = normalizeCavemanMode(patch.cavemanMode);
       }
+      if (Object.prototype.hasOwnProperty.call(patch, "paygEnabled")) {
+        policyPatch.paygEnabled = !!patch.paygEnabled;
+      }
       const merged = { ...existing, ...patch, ...policyPatch };
       db.run(
-        `UPDATE apiKeys SET name = ?, machineId = ?, isActive = ?, dailyTokenLimit = ?, monthlyTokenLimit = ?, lifetimeTokenLimit = ?, requestsPerMinute = ?, maxTokensPerRequest = ?, expiresAt = ?, allowedModels = ?, allowedIps = ?, rtkMode = ?, cavemanMode = ? WHERE id = ?`,
+        `UPDATE apiKeys SET name = ?, machineId = ?, isActive = ?, dailyTokenLimit = ?, monthlyTokenLimit = ?, lifetimeTokenLimit = ?, requestsPerMinute = ?, maxTokensPerRequest = ?, expiresAt = ?, allowedModels = ?, allowedIps = ?, rtkMode = ?, cavemanMode = ?, paygEnabled = ? WHERE id = ?`,
         [
           merged.name,
           merged.machineId,
@@ -424,6 +434,7 @@ export async function bulkUpdateApiKeys(ids, patch) {
           stringifyJson(merged.allowedIps),
           merged.rtkMode,
           merged.cavemanMode,
+          merged.paygEnabled ? 1 : 0,
           id,
         ]
       );
@@ -483,9 +494,12 @@ export async function bulkUpdateApiKeysWith(ids, buildPatch) {
       if (Object.prototype.hasOwnProperty.call(patch, "cavemanMode")) {
         policyPatch.cavemanMode = normalizeCavemanMode(patch.cavemanMode);
       }
+      if (Object.prototype.hasOwnProperty.call(patch, "paygEnabled")) {
+        policyPatch.paygEnabled = !!patch.paygEnabled;
+      }
       const merged = { ...existing, ...patch, ...policyPatch };
       db.run(
-        `UPDATE apiKeys SET name = ?, machineId = ?, isActive = ?, dailyTokenLimit = ?, monthlyTokenLimit = ?, lifetimeTokenLimit = ?, requestsPerMinute = ?, maxTokensPerRequest = ?, expiresAt = ?, allowedModels = ?, allowedIps = ?, rtkMode = ?, cavemanMode = ? WHERE id = ?`,
+        `UPDATE apiKeys SET name = ?, machineId = ?, isActive = ?, dailyTokenLimit = ?, monthlyTokenLimit = ?, lifetimeTokenLimit = ?, requestsPerMinute = ?, maxTokensPerRequest = ?, expiresAt = ?, allowedModels = ?, allowedIps = ?, rtkMode = ?, cavemanMode = ?, paygEnabled = ? WHERE id = ?`,
         [
           merged.name,
           merged.machineId,
@@ -500,6 +514,7 @@ export async function bulkUpdateApiKeysWith(ids, buildPatch) {
           stringifyJson(merged.allowedIps),
           merged.rtkMode,
           merged.cavemanMode,
+          merged.paygEnabled ? 1 : 0,
           id,
         ]
       );

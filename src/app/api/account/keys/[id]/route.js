@@ -37,6 +37,9 @@ export async function PATCH(request, { params }) {
   if (Object.prototype.hasOwnProperty.call(body || {}, "isActive")) {
     patch.isActive = !!body.isActive;
   }
+  if (Object.prototype.hasOwnProperty.call(body || {}, "paygEnabled")) {
+    patch.paygEnabled = !!body.paygEnabled;
+  }
   if (Object.keys(patch).length === 0) {
     return NextResponse.json({ key: got.key });
   }

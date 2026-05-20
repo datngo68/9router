@@ -12,6 +12,7 @@ import {
 } from "@/lib/db/repos/notificationsRepo";
 import { getCustomers } from "@/lib/localDb";
 import { resolveRecipients, dispatchExternal } from "./dispatch.js";
+import { tickLowBalanceCheck } from "./walletEvents.js";
 
 let running = false;
 
@@ -78,11 +79,19 @@ export async function runDueScheduled({ now = new Date().toISOString(), limit = 
 
 let interval = null;
 const TICK_MS = 60_000;
+let walletTicks = 0;
 
 export function startNotificationScheduler() {
   if (interval) return;
   interval = setInterval(() => {
     runDueScheduled().catch((e) => console.log("[notifications/scheduler] tick failed:", e.message));
+    // Wallet low-balance check runs every 5 minutes (every 5th tick).
+    walletTicks = (walletTicks + 1) % 5;
+    if (walletTicks === 0) {
+      tickLowBalanceCheck().catch((e) =>
+        console.log("[notifications/scheduler] wallet check failed:", e.message)
+      );
+    }
   }, TICK_MS);
   if (interval.unref) interval.unref();
 }

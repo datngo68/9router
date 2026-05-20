@@ -16,13 +16,18 @@
 //
 // Safety net: any reservation older than RESERVATION_TTL_MS is auto-released
 // on next read so a crashed/leaked request can't permanently inflate quota.
+//
+// PAYG variant: when a request bills the wallet, we also reserve an
+// estimated micro-VND cost so concurrent wallet-billed requests don't all
+// pass the balance check on stale data. Wallet reservations live in the
+// same map alongside token reservations and share the same TTL/lifecycle.
 
 const RESERVATION_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
 
 // Shared across Next.js module reloads (dev) and SSE/worker imports.
 if (!global._apiKeyReservations) {
-  global._apiKeyReservations = new Map(); // reservationId → { apiKeyId, tokens, createdAt }
+  global._apiKeyReservations = new Map(); // reservationId → { apiKeyId, tokens, walletMicroVnd, createdAt }
 }
 const reservations = global._apiKeyReservations;
 
@@ -98,19 +103,52 @@ export function getReservedTokens(apiKeyId) {
   pruneExpired();
   let sum = 0;
   for (const r of reservations.values()) {
-    if (r.apiKeyId === apiKeyId) sum += r.tokens;
+    if (r.apiKeyId === apiKeyId) sum += r.tokens || 0;
+  }
+  return sum;
+}
+
+/**
+ * Sum of currently reserved wallet micro-VND for an apiKeyId. Used by the
+ * PAYG balance pre-check so concurrent wallet-billed requests don't all see
+ * the same pre-debit balance and overdraft together.
+ */
+export function getReservedWalletMicroVnd(apiKeyId) {
+  if (!apiKeyId) return 0;
+  pruneExpired();
+  let sum = 0;
+  for (const r of reservations.values()) {
+    if (r.apiKeyId === apiKeyId) sum += r.walletMicroVnd || 0;
   }
   return sum;
 }
 
 /**
  * Reserve `tokens` for `apiKeyId`. Returns reservationId.
+ * Optional walletMicroVnd estimate is held alongside the token reservation
+ * so a single reservationId covers both quota and wallet checks.
  */
-export function reserveTokens(apiKeyId, tokens) {
-  if (!apiKeyId || !Number.isFinite(tokens) || tokens <= 0) return null;
+export function reserveTokens(apiKeyId, tokens, walletMicroVnd = 0) {
+  if (!apiKeyId) return null;
+  const tokensNum = Number.isFinite(tokens) && tokens > 0 ? Math.ceil(tokens) : 0;
+  const walletNum = Number.isFinite(walletMicroVnd) && walletMicroVnd > 0 ? Math.ceil(walletMicroVnd) : 0;
+  if (tokensNum <= 0 && walletNum <= 0) return null;
   const id = newId();
-  reservations.set(id, { apiKeyId, tokens: Math.ceil(tokens), createdAt: Date.now() });
+  reservations.set(id, { apiKeyId, tokens: tokensNum, walletMicroVnd: walletNum, createdAt: Date.now() });
   return id;
+}
+
+/**
+ * Add a wallet micro-VND estimate to an existing reservation. Used when the
+ * decision to charge from wallet is taken AFTER the initial reservation
+ * (e.g. quota fallback).
+ */
+export function attachWalletEstimate(reservationId, walletMicroVnd) {
+  if (!reservationId) return;
+  const r = reservations.get(reservationId);
+  if (!r) return;
+  const add = Number.isFinite(walletMicroVnd) && walletMicroVnd > 0 ? Math.ceil(walletMicroVnd) : 0;
+  r.walletMicroVnd = (r.walletMicroVnd || 0) + add;
 }
 
 /**
