@@ -15,6 +15,7 @@ const ALLOWED_ACTIONS = new Set([
   "setExpiry",
   "setRateLimit",
   "setAllowedModels",
+  "setProviderAccess",
   "delete",
 ]);
 
@@ -144,6 +145,34 @@ export async function POST(request) {
         return { allowedModels: merged };
       });
       return NextResponse.json({ ...res, action, applied: { mode: "merge", allowedModels: list } });
+    }
+
+    case "setProviderAccess": {
+      const mode = payload.mode === "merge" ? "merge" : "set";
+      const allowedProviders = Array.isArray(payload.allowedProviders) ? payload.allowedProviders : null;
+      const allowedConnectionIds = Array.isArray(payload.allowedConnectionIds) ? payload.allowedConnectionIds : null;
+      if (!allowedProviders && !allowedConnectionIds) {
+        return NextResponse.json({ error: "allowedProviders or allowedConnectionIds required" }, { status: 400 });
+      }
+      if (mode === "set") {
+        const patch = {};
+        if (allowedProviders) patch.allowedProviders = allowedProviders;
+        if (allowedConnectionIds) patch.allowedConnectionIds = allowedConnectionIds;
+        const res = await bulkUpdateApiKeys(ids, patch);
+        return NextResponse.json({ ...res, action, applied: { mode, ...patch } });
+      }
+      // merge mode
+      const res = await bulkUpdateApiKeysWith(ids, (existing) => {
+        const out = {};
+        if (allowedProviders) {
+          out.allowedProviders = Array.from(new Set([...(existing.allowedProviders || []), ...allowedProviders]));
+        }
+        if (allowedConnectionIds) {
+          out.allowedConnectionIds = Array.from(new Set([...(existing.allowedConnectionIds || []), ...allowedConnectionIds]));
+        }
+        return out;
+      });
+      return NextResponse.json({ ...res, action, applied: { mode, allowedProviders, allowedConnectionIds } });
     }
 
     case "delete": {

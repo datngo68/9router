@@ -1,5 +1,5 @@
 // Latest schema version — bumped when a migration is added in ./migrations/
-export const SCHEMA_VERSION = 14;
+export const SCHEMA_VERSION = 15;
 
 export const PRAGMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -91,6 +91,8 @@ export const TABLES = {
       allowedIps: "TEXT DEFAULT '[]'",
       rtkMode: "TEXT DEFAULT 'inherit'",
       cavemanMode: "TEXT DEFAULT 'inherit'",
+      allowedProviders: "TEXT DEFAULT '[]'",
+      allowedConnectionIds: "TEXT DEFAULT '[]'",
       customerId: "TEXT",
       orderId: "TEXT",
       createdAt: "TEXT NOT NULL",

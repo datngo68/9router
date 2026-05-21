@@ -28,6 +28,8 @@ import {
   checkApiKeyMaxTokensPerRequest,
   checkApiKeyModelAccess,
   checkApiKeyComboModelAccess,
+  checkApiKeyProviderAccess,
+  filterConnectionsByApiKey,
   hasWalletHeadroom,
 } from "../services/apiKeyPolicy.js";
 import {
@@ -40,6 +42,7 @@ import { consumeRequest } from "../services/apiKeyRateLimit.js";
 import { checkIpAllowlist } from "../services/ipAllowlist.js";
 import { getClientIp } from "@/lib/auth/loginThrottle.js";
 import { hasValidCliToken, isLoopbackRequest } from "@/lib/auth/cliToken.js";
+import { resolveAllowedScope } from "@/lib/db/repos/apiKeysRepo.js";
 
 const SENSITIVE_HEADER_PATTERNS = ["authorization", "x-api-key", "cookie", "set-cookie", "x-auth-token"];
 
@@ -352,6 +355,19 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
     return errorResponse(modelCheck.status, modelCheck.message);
   }
 
+  // Provider access check: allowedProviders / allowedConnectionIds
+  let resolvedScope = null;
+  if (apiKeyRecord) {
+    resolvedScope = await resolveAllowedScope(apiKeyRecord);
+    if (!resolvedScope.unrestricted) {
+      const provCheck = checkApiKeyProviderAccess(apiKeyRecord, provider, resolvedScope.providers);
+      if (!provCheck.allowed) {
+        log.warn("AUTH", provCheck.message);
+        return errorResponse(provCheck.status, provCheck.message);
+      }
+    }
+  }
+
   // Log model routing (alias → actual model)
   if (modelStr !== `${provider}/${model}`) {
     log.info("ROUTING", `${modelStr} → ${provider}/${model}`);
@@ -368,7 +384,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
   let lastStatus = null;
 
   while (true) {
-    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model);
+    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { apiKeyRecord });
 
     // All accounts unavailable
     if (!credentials || credentials.allRateLimited) {

@@ -42,6 +42,30 @@ function normalizeAllowedIps(value) {
   );
 }
 
+function normalizeAllowedProviders(value) {
+  const list = Array.isArray(value) ? value : parseJson(value, []);
+  if (!Array.isArray(list)) return [];
+  return Array.from(
+    new Set(
+      list
+        .map((p) => (typeof p === "string" ? p.trim().toLowerCase() : ""))
+        .filter(Boolean)
+    )
+  );
+}
+
+function normalizeAllowedConnectionIds(value) {
+  const list = Array.isArray(value) ? value : parseJson(value, []);
+  if (!Array.isArray(list)) return [];
+  return Array.from(
+    new Set(
+      list
+        .map((id) => (typeof id === "string" ? id.trim() : ""))
+        .filter(Boolean)
+    )
+  );
+}
+
 const RTK_MODES = new Set(["inherit", "on", "off"]);
 const CAVEMAN_MODES = new Set(["inherit", "off", "lite", "full", "ultra"]);
 
@@ -68,6 +92,8 @@ export function normalizeApiKeyPolicy(data = {}) {
     rtkMode: normalizeRtkMode(data.rtkMode),
     cavemanMode: normalizeCavemanMode(data.cavemanMode),
     paygEnabled: !!data.paygEnabled,
+    allowedProviders: normalizeAllowedProviders(data.allowedProviders),
+    allowedConnectionIds: normalizeAllowedConnectionIds(data.allowedConnectionIds),
   };
 }
 
@@ -111,6 +137,8 @@ function rowToKey(row) {
     rtkMode: normalizeRtkMode(row.rtkMode),
     cavemanMode: normalizeCavemanMode(row.cavemanMode),
     paygEnabled: row.paygEnabled === 1 || row.paygEnabled === true,
+    allowedProviders: normalizeAllowedProviders(row.allowedProviders),
+    allowedConnectionIds: normalizeAllowedConnectionIds(row.allowedConnectionIds),
     customerId: row.customerId || null,
     orderId: row.orderId || null,
     createdAt: row.createdAt,
@@ -170,7 +198,7 @@ export async function createApiKey(name, machineId, options = {}) {
     createdAt: new Date().toISOString(),
   };
   db.run(
-    `INSERT INTO apiKeys(id, key, keyHash, keyPrefix, keyLast4, name, machineId, isActive, dailyTokenLimit, monthlyTokenLimit, lifetimeTokenLimit, requestsPerMinute, maxTokensPerRequest, expiresAt, allowedModels, allowedIps, rtkMode, cavemanMode, paygEnabled, createdAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO apiKeys(id, key, keyHash, keyPrefix, keyLast4, name, machineId, isActive, dailyTokenLimit, monthlyTokenLimit, lifetimeTokenLimit, requestsPerMinute, maxTokensPerRequest, expiresAt, allowedModels, allowedIps, rtkMode, cavemanMode, paygEnabled, allowedProviders, allowedConnectionIds, createdAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       apiKey.id,
       null, // never persist plaintext
@@ -191,6 +219,8 @@ export async function createApiKey(name, machineId, options = {}) {
       apiKey.rtkMode,
       apiKey.cavemanMode,
       apiKey.paygEnabled ? 1 : 0,
+      stringifyJson(apiKey.allowedProviders),
+      stringifyJson(apiKey.allowedConnectionIds),
       apiKey.createdAt,
     ]
   );
@@ -234,9 +264,15 @@ export async function updateApiKey(id, data) {
     if (Object.prototype.hasOwnProperty.call(data, "paygEnabled")) {
       policyPatch.paygEnabled = !!data.paygEnabled;
     }
+    if (Object.prototype.hasOwnProperty.call(data, "allowedProviders")) {
+      policyPatch.allowedProviders = normalizeAllowedProviders(data.allowedProviders);
+    }
+    if (Object.prototype.hasOwnProperty.call(data, "allowedConnectionIds")) {
+      policyPatch.allowedConnectionIds = normalizeAllowedConnectionIds(data.allowedConnectionIds);
+    }
     const merged = { ...existing, ...data, ...policyPatch };
     db.run(
-      `UPDATE apiKeys SET name = ?, machineId = ?, isActive = ?, dailyTokenLimit = ?, monthlyTokenLimit = ?, lifetimeTokenLimit = ?, requestsPerMinute = ?, maxTokensPerRequest = ?, expiresAt = ?, allowedModels = ?, allowedIps = ?, rtkMode = ?, cavemanMode = ?, paygEnabled = ? WHERE id = ?`,
+      `UPDATE apiKeys SET name = ?, machineId = ?, isActive = ?, dailyTokenLimit = ?, monthlyTokenLimit = ?, lifetimeTokenLimit = ?, requestsPerMinute = ?, maxTokensPerRequest = ?, expiresAt = ?, allowedModels = ?, allowedIps = ?, rtkMode = ?, cavemanMode = ?, paygEnabled = ?, allowedProviders = ?, allowedConnectionIds = ? WHERE id = ?`,
       [
         merged.name,
         merged.machineId,
@@ -252,6 +288,8 @@ export async function updateApiKey(id, data) {
         merged.rtkMode,
         merged.cavemanMode,
         merged.paygEnabled ? 1 : 0,
+        stringifyJson(merged.allowedProviders),
+        stringifyJson(merged.allowedConnectionIds),
         id,
       ]
     );
@@ -417,9 +455,15 @@ export async function bulkUpdateApiKeys(ids, patch) {
       if (Object.prototype.hasOwnProperty.call(patch, "paygEnabled")) {
         policyPatch.paygEnabled = !!patch.paygEnabled;
       }
+      if (Object.prototype.hasOwnProperty.call(patch, "allowedProviders")) {
+        policyPatch.allowedProviders = normalizeAllowedProviders(patch.allowedProviders);
+      }
+      if (Object.prototype.hasOwnProperty.call(patch, "allowedConnectionIds")) {
+        policyPatch.allowedConnectionIds = normalizeAllowedConnectionIds(patch.allowedConnectionIds);
+      }
       const merged = { ...existing, ...patch, ...policyPatch };
       db.run(
-        `UPDATE apiKeys SET name = ?, machineId = ?, isActive = ?, dailyTokenLimit = ?, monthlyTokenLimit = ?, lifetimeTokenLimit = ?, requestsPerMinute = ?, maxTokensPerRequest = ?, expiresAt = ?, allowedModels = ?, allowedIps = ?, rtkMode = ?, cavemanMode = ?, paygEnabled = ? WHERE id = ?`,
+        `UPDATE apiKeys SET name = ?, machineId = ?, isActive = ?, dailyTokenLimit = ?, monthlyTokenLimit = ?, lifetimeTokenLimit = ?, requestsPerMinute = ?, maxTokensPerRequest = ?, expiresAt = ?, allowedModels = ?, allowedIps = ?, rtkMode = ?, cavemanMode = ?, paygEnabled = ?, allowedProviders = ?, allowedConnectionIds = ? WHERE id = ?`,
         [
           merged.name,
           merged.machineId,
@@ -435,6 +479,8 @@ export async function bulkUpdateApiKeys(ids, patch) {
           merged.rtkMode,
           merged.cavemanMode,
           merged.paygEnabled ? 1 : 0,
+          stringifyJson(merged.allowedProviders),
+          stringifyJson(merged.allowedConnectionIds),
           id,
         ]
       );
@@ -497,9 +543,15 @@ export async function bulkUpdateApiKeysWith(ids, buildPatch) {
       if (Object.prototype.hasOwnProperty.call(patch, "paygEnabled")) {
         policyPatch.paygEnabled = !!patch.paygEnabled;
       }
+      if (Object.prototype.hasOwnProperty.call(patch, "allowedProviders")) {
+        policyPatch.allowedProviders = normalizeAllowedProviders(patch.allowedProviders);
+      }
+      if (Object.prototype.hasOwnProperty.call(patch, "allowedConnectionIds")) {
+        policyPatch.allowedConnectionIds = normalizeAllowedConnectionIds(patch.allowedConnectionIds);
+      }
       const merged = { ...existing, ...patch, ...policyPatch };
       db.run(
-        `UPDATE apiKeys SET name = ?, machineId = ?, isActive = ?, dailyTokenLimit = ?, monthlyTokenLimit = ?, lifetimeTokenLimit = ?, requestsPerMinute = ?, maxTokensPerRequest = ?, expiresAt = ?, allowedModels = ?, allowedIps = ?, rtkMode = ?, cavemanMode = ?, paygEnabled = ? WHERE id = ?`,
+        `UPDATE apiKeys SET name = ?, machineId = ?, isActive = ?, dailyTokenLimit = ?, monthlyTokenLimit = ?, lifetimeTokenLimit = ?, requestsPerMinute = ?, maxTokensPerRequest = ?, expiresAt = ?, allowedModels = ?, allowedIps = ?, rtkMode = ?, cavemanMode = ?, paygEnabled = ?, allowedProviders = ?, allowedConnectionIds = ? WHERE id = ?`,
         [
           merged.name,
           merged.machineId,
@@ -515,6 +567,8 @@ export async function bulkUpdateApiKeysWith(ids, buildPatch) {
           merged.rtkMode,
           merged.cavemanMode,
           merged.paygEnabled ? 1 : 0,
+          stringifyJson(merged.allowedProviders),
+          stringifyJson(merged.allowedConnectionIds),
           id,
         ]
       );
@@ -535,4 +589,54 @@ export async function bulkDeleteApiKeys(ids) {
     }
   });
   return { deleted };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Connection cache for resolveAllowedScope (30s TTL, same pattern as usageRepo)
+if (!global._apiKeyConnCache) global._apiKeyConnCache = { map: {}, ts: 0 };
+const _connCache = global._apiKeyConnCache;
+const CONN_CACHE_TTL = 30_000;
+
+async function getConnectionMapCached() {
+  if (Date.now() - _connCache.ts < CONN_CACHE_TTL) return _connCache.map;
+  try {
+    const { getProviderConnections } = await import("./connectionsRepo.js");
+    const all = await getProviderConnections();
+    const map = {};
+    for (const c of all) map[c.id] = c.provider;
+    _connCache.map = map;
+    _connCache.ts = Date.now();
+  } catch {}
+  return _connCache.map;
+}
+
+/**
+ * Resolve the effective provider/connection scope for an API key record.
+ * - If allowedConnectionIds is non-empty, providers are inferred from those connections.
+ * - Otherwise allowedProviders is used directly.
+ * - Both empty = unrestricted.
+ *
+ * @param {object} apiKeyRecord
+ * @returns {Promise<{ providers: Set<string>, connectionIds: Set<string>, unrestricted: boolean }>}
+ */
+export async function resolveAllowedScope(apiKeyRecord) {
+  const connIds = apiKeyRecord?.allowedConnectionIds || [];
+  const provs = apiKeyRecord?.allowedProviders || [];
+
+  if (connIds.length === 0 && provs.length === 0) {
+    return { providers: new Set(), connectionIds: new Set(), unrestricted: true };
+  }
+
+  if (connIds.length > 0) {
+    const connMap = await getConnectionMapCached();
+    const connectionIds = new Set(connIds);
+    const providers = new Set();
+    for (const cid of connIds) {
+      const prov = connMap[cid];
+      if (prov) providers.add(prov);
+    }
+    return { providers, connectionIds, unrestricted: false };
+  }
+
+  return { providers: new Set(provs), connectionIds: new Set(), unrestricted: false };
 }

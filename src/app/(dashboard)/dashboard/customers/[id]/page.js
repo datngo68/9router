@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -25,13 +25,15 @@ const TABS = [
 
 export default function AdminCustomerDetailPage() {
   const { id } = useParams();
+  const searchParams = useSearchParams();
   const [data, setData] = useState(null);
-  const [tab, setTab] = useState("overview");
+  const [tab, setTab] = useState(searchParams.get("tab") || "overview");
   const [notes, setNotes] = useState("");
   const [savedMsg, setSavedMsg] = useState("");
   const [confirm, setConfirm] = useState(null);
   const [quotaModal, setQuotaModal] = useState(null);
   const [compressModal, setCompressModal] = useState(null);
+  const [providerModal, setProviderModal] = useState(null);
   const [toast, setToast] = useState("");
 
   async function load() {
@@ -69,7 +71,7 @@ export default function AdminCustomerDetailPage() {
   if (!data) return <div className="h-64 animate-pulse rounded-xl border border-border-subtle bg-surface" />;
   if (data.error) return <Card><p className="text-red-500">{data.error}</p></Card>;
 
-  const { customer, orders, keys, summary, usageDaily, usageByModel, keyLimitsUsage, voucherRedemptions, referral } = data;
+  const { customer, orders, keys, summary, usageDaily, usageByModel, usageByProvider, keyLimitsUsage, nearLimitKeys, voucherRedemptions, referral } = data;
   return (
     <div className="flex flex-col gap-6">
       <div>
@@ -110,7 +112,7 @@ export default function AdminCustomerDetailPage() {
         />
       )}
       {tab === "orders" && <OrdersTab orders={orders} />}
-      {tab === "usage" && <UsageTab usageDaily={usageDaily} usageByModel={usageByModel} keyLimitsUsage={keyLimitsUsage} />}
+      {tab === "usage" && <UsageTab usageDaily={usageDaily} usageByModel={usageByModel} usageByProvider={usageByProvider} keyLimitsUsage={keyLimitsUsage} nearLimitKeys={nearLimitKeys} />}
       {tab === "voucher" && <VoucherTab redemptions={voucherRedemptions} />}
       {tab === "wallet" && <WalletTab customerId={id} notify={notify} />}
       {tab === "keys" && (
@@ -119,6 +121,7 @@ export default function AdminCustomerDetailPage() {
           onToggle={toggleKey}
           onOpenQuota={(k) => setQuotaModal({ key: k, mode: "add", dailyTokenLimit: 0, monthlyTokenLimit: 0, lifetimeTokenLimit: 0, extendDays: 0 })}
           onOpenCompress={(k) => setCompressModal({ key: k })}
+          onOpenProvider={(k) => setProviderModal({ key: k })}
         />
       )}
       {tab === "actions" && (
@@ -161,6 +164,23 @@ export default function AdminCustomerDetailPage() {
           if (!res.ok) { notify(d?.error || "Lỗi cập nhật compress"); return; }
           setCompressModal(null);
           notify("Đã cập nhật compress.");
+          load();
+        }}
+      />
+
+      <ProviderAccessModal
+        modal={providerModal}
+        onClose={() => setProviderModal(null)}
+        onSave={async (payload) => {
+          const res = await fetch(`/api/admin/api-keys/${providerModal.key.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          const d = await res.json().catch(() => ({}));
+          if (!res.ok) { notify(d?.error || "Lỗi cập nhật provider access"); return; }
+          setProviderModal(null);
+          notify("Đã cập nhật provider access.");
           load();
         }}
       />
@@ -286,10 +306,55 @@ function StatCard({ label, value, hint, small }) {
   );
 }
 
-function UsageTab({ usageDaily, usageByModel, keyLimitsUsage }) {
+function UsageTab({ usageDaily, usageByModel, usageByProvider, keyLimitsUsage, nearLimitKeys }) {
   const max = Math.max(0, ...(usageDaily || []).map((d) => d.costUsd));
   return (
     <div className="flex flex-col gap-6">
+      {nearLimitKeys && nearLimitKeys.length > 0 && (
+        <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 px-4 py-3">
+          <h3 className="text-sm font-semibold text-amber-600 dark:text-amber-400 mb-1">Cảnh báo quota</h3>
+          <div className="flex flex-col gap-1">
+            {nearLimitKeys.map((k) => (
+              <div key={k.keyId} className="flex items-center gap-2 text-xs">
+                <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] uppercase ${k.level === "critical" ? "bg-red-500/15 text-red-500" : "bg-amber-500/15 text-amber-600 dark:text-amber-400"}`}>
+                  {k.level === "critical" ? "Critical" : "Warn"}
+                </span>
+                <span className="font-medium">{k.name}</span>
+                <span className="text-text-muted">({k.keyDisplay}) — {k.maxPct}% quota</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {usageByProvider && usageByProvider.length > 0 && (
+        <Card>
+          <h2 className="font-semibold mb-3">Cost theo provider (30d)</h2>
+          <table className="w-full text-sm">
+            <thead className="text-xs uppercase text-text-muted">
+              <tr>
+                <th className="pb-2 text-left font-normal">Provider</th>
+                <th className="pb-2 text-right font-normal">Cost</th>
+                <th className="pb-2 text-right font-normal">Tokens</th>
+                <th className="pb-2 text-right font-normal">Req</th>
+                <th className="pb-2 text-right font-normal">Share</th>
+              </tr>
+            </thead>
+            <tbody>
+              {usageByProvider.map((p) => (
+                <tr key={p.provider} className="border-t border-border-subtle">
+                  <td className="py-2 font-mono text-xs">{p.provider}</td>
+                  <td className="py-2 text-right">{fmtUsd(p.costUsd)}</td>
+                  <td className="py-2 text-right text-xs text-text-muted">{fmtNum(p.totalTokens)}</td>
+                  <td className="py-2 text-right text-xs text-text-muted">{fmtNum(p.requests)}</td>
+                  <td className="py-2 text-right text-xs text-text-muted">{p.sharePct}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+
       <Card>
         <h2 className="font-semibold mb-3">Cost upstream theo ngày (30d)</h2>
         {max === 0 ? (
@@ -599,7 +664,7 @@ function VoucherTab({ redemptions }) {
   );
 }
 
-function KeysTab({ keys, onToggle, onOpenQuota, onOpenCompress }) {
+function KeysTab({ keys, onToggle, onOpenQuota, onOpenCompress, onOpenProvider }) {
   return (
     <Card>
       <h2 className="font-semibold mb-3">API Keys ({keys.length})</h2>
@@ -637,6 +702,7 @@ function KeysTab({ keys, onToggle, onOpenQuota, onOpenCompress }) {
                   <td className="px-3 py-2 text-right whitespace-nowrap">
                     <Button onClick={() => onOpenCompress(k)} size="sm" variant="ghost">Compress</Button>
                     <Button onClick={() => onOpenQuota(k)} size="sm" variant="ghost">Quota / gia hạn</Button>
+                    <Button onClick={() => onOpenProvider(k)} size="sm" variant="ghost">Provider</Button>
                   </td>
                 </tr>
               ))}
@@ -782,6 +848,106 @@ function CompressModal({ modal, onClose, onSave }) {
 
         <div className="flex gap-2">
           <Button onClick={() => onSave({ rtkMode, cavemanMode })} fullWidth>Áp dụng</Button>
+          <Button onClick={onClose} variant="ghost" fullWidth>Hủy</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function ProviderAccessModal({ modal, onClose, onSave }) {
+  const [options, setOptions] = useState(null);
+  const [selectedProviders, setSelectedProviders] = useState([]);
+  const [selectedConnections, setSelectedConnections] = useState([]);
+
+  useEffect(() => {
+    if (!modal) return;
+    fetch("/api/admin/provider-options", { cache: "no-store" })
+      .then((r) => r.json())
+      .then(setOptions)
+      .catch(() => setOptions({ providers: [], connections: [] }));
+    if (modal.key) {
+      setSelectedProviders(modal.key.allowedProviders || []);
+      setSelectedConnections(modal.key.allowedConnectionIds || []);
+    } else {
+      setSelectedProviders([]);
+      setSelectedConnections([]);
+    }
+  }, [modal]);
+
+  if (!modal) return null;
+
+  function toggleProvider(id) {
+    setSelectedProviders((prev) =>
+      prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]
+    );
+  }
+
+  function toggleConnection(id) {
+    setSelectedConnections((prev) =>
+      prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]
+    );
+  }
+
+  function selectAllConnectionsOfProviders() {
+    if (!options) return;
+    const connIds = options.connections
+      .filter((c) => selectedProviders.includes(c.provider))
+      .map((c) => c.id);
+    setSelectedConnections((prev) => Array.from(new Set([...prev, ...connIds])));
+  }
+
+  function submit() {
+    onSave({ allowedProviders: selectedProviders, allowedConnectionIds: selectedConnections });
+  }
+
+  return (
+    <Modal isOpen={!!modal} onClose={onClose} title={`Provider access: ${modal.key?.name || modal.key?.keyDisplay || ""}`}>
+      <div className="flex flex-col gap-4 max-h-[70vh] overflow-y-auto">
+        <p className="text-xs text-text-muted">
+          Để trống cả 2 = không giới hạn. Nếu chọn connection cụ thể, provider sẽ được suy ra tự động.
+        </p>
+
+        {!options ? (
+          <div className="h-20 animate-pulse" />
+        ) : (
+          <>
+            <div>
+              <span className="text-sm font-medium">Providers ({selectedProviders.length}/{options.providers.length})</span>
+              <div className="flex flex-wrap gap-2 mt-1">
+                {options.providers.map((p) => (
+                  <label key={p.id} className="flex items-center gap-1.5 text-sm cursor-pointer">
+                    <input type="checkbox" checked={selectedProviders.includes(p.id)} onChange={() => toggleProvider(p.id)} />
+                    <span>{p.name}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-sm font-medium">Connections ({selectedConnections.length}/{options.connections.length})</span>
+                {selectedProviders.length > 0 && (
+                  <button onClick={selectAllConnectionsOfProviders} className="text-xs text-primary hover:underline">
+                    Chọn tất cả conn của provider đã chọn
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-col gap-1 max-h-48 overflow-y-auto">
+                {options.connections.map((c) => (
+                  <label key={c.id} className="flex items-center gap-1.5 text-sm cursor-pointer">
+                    <input type="checkbox" checked={selectedConnections.includes(c.id)} onChange={() => toggleConnection(c.id)} />
+                    <span>{c.name}</span>
+                    <span className="text-xs text-text-muted ml-1">({c.providerName})</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+
+        <div className="flex gap-2">
+          <Button onClick={submit} fullWidth>Áp dụng</Button>
           <Button onClick={onClose} variant="ghost" fullWidth>Hủy</Button>
         </div>
       </div>

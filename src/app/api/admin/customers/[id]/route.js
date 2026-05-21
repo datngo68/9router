@@ -93,6 +93,28 @@ export async function GET(_request, { params }) {
     costUsd: Number(r.costUsd) || 0,
   }));
 
+  // ── usageByProvider 30d ─────────────────────────────────────────────
+  const usageByProvider = db.all(
+    `SELECT u.provider,
+            COUNT(*) AS requests,
+            COALESCE(SUM(u.promptTokens + u.completionTokens), 0) AS totalTokens,
+            COALESCE(SUM(u.cost), 0) AS costUsd
+     FROM usageHistory u INNER JOIN apiKeys k ON k.id = u.apiKeyId
+     WHERE k.customerId = ? AND u.timestamp >= ?
+     GROUP BY u.provider
+     ORDER BY costUsd DESC`,
+    [id, cutoff30Iso]
+  ).map((r) => {
+    const totalCost = usageByModel.reduce((s, m) => s + m.costUsd, 0) || 1;
+    return {
+      provider: r.provider,
+      requests: Number(r.requests) || 0,
+      totalTokens: Number(r.totalTokens) || 0,
+      costUsd: Number(r.costUsd) || 0,
+      sharePct: Math.round(((Number(r.costUsd) || 0) / totalCost) * 100),
+    };
+  });
+
   // ── keyLimitsUsage (per-key utilization %) ───────────────────────────
   const keyLimitsUsage = await Promise.all(
     keys.map(async (k) => {
@@ -138,6 +160,17 @@ export async function GET(_request, { params }) {
   // ── referral info ─────────────────────────────────────────────────────
   const referral = await getReferralAdminInfo(id);
 
+  // ── nearLimitKeys: keys approaching quota limits ────────────────────
+  const nearLimitKeys = keyLimitsUsage
+    .filter((k) => {
+      const pcts = [k.daily.pct, k.monthly.pct, k.lifetime.pct].filter((p) => p !== null);
+      return pcts.some((p) => p >= 80);
+    })
+    .map((k) => {
+      const maxPct = Math.max(...[k.daily.pct, k.monthly.pct, k.lifetime.pct].filter((p) => p !== null));
+      return { ...k, level: maxPct >= 95 ? "critical" : "warn", maxPct };
+    });
+
   return NextResponse.json({
     customer,
     orders,
@@ -152,7 +185,9 @@ export async function GET(_request, { params }) {
     },
     usageDaily,
     usageByModel,
+    usageByProvider,
     keyLimitsUsage,
+    nearLimitKeys,
     voucherRedemptions,
     referral,
   });

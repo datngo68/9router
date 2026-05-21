@@ -64,6 +64,8 @@ function mapRow(row) {
     rtkMode: row.rtkMode || "inherit",
     cavemanMode: row.cavemanMode || "inherit",
     paygEnabled: row.paygEnabled === 1 || row.paygEnabled === true,
+    allowedProviders: parseJson(row.allowedProviders, []),
+    allowedConnectionIds: parseJson(row.allowedConnectionIds, []),
     customerId: row.customerId || null,
     orderId: row.orderId || null,
     createdAt: row.createdAt,
@@ -262,4 +264,69 @@ export function filterModelsByApiKeyPolicy(models, apiKeyRecord) {
   const allowedSet = new Set(allowedModels.map(normalizeModelId).filter(Boolean));
   if (allowedSet.size === 0) return models;
   return models.filter((model) => allowedSet.has(normalizeModelId(model?.id)));
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Provider/connection access checks (sync, no DB hit on hot path)
+
+/**
+ * Check if the API key is allowed to use a given provider.
+ * Uses allowedConnectionIds (inferred providers) first, then allowedProviders.
+ * Both empty = unrestricted (allowed).
+ *
+ * @param {object} apiKeyRecord - loaded via loadApiKeyPolicy
+ * @param {string} provider - resolved provider id
+ * @param {Set<string>|null} inferredProviders - providers inferred from allowedConnectionIds (pre-resolved by caller)
+ * @returns {{ allowed: boolean, status?: number, message?: string }}
+ */
+export function checkApiKeyProviderAccess(apiKeyRecord, provider, inferredProviders = null) {
+  if (!apiKeyRecord) return { allowed: true };
+
+  const connIds = Array.isArray(apiKeyRecord.allowedConnectionIds) ? apiKeyRecord.allowedConnectionIds : [];
+  const provs = Array.isArray(apiKeyRecord.allowedProviders) ? apiKeyRecord.allowedProviders : [];
+
+  // Unrestricted
+  if (connIds.length === 0 && provs.length === 0) return { allowed: true };
+
+  const normalizedProvider = (provider || "").trim().toLowerCase();
+  if (!normalizedProvider) return { allowed: true };
+
+  // If connectionIds are set, use inferred providers from those connections
+  if (connIds.length > 0 && inferredProviders) {
+    if (inferredProviders.has(normalizedProvider)) return { allowed: true };
+    return {
+      allowed: false,
+      status: HTTP_STATUS.FORBIDDEN,
+      message: `API key is not allowed to use provider: ${provider}`,
+    };
+  }
+
+  // Fall back to allowedProviders list
+  if (provs.length > 0) {
+    const provSet = new Set(provs.map((p) => p.trim().toLowerCase()));
+    if (provSet.has(normalizedProvider)) return { allowed: true };
+    return {
+      allowed: false,
+      status: HTTP_STATUS.FORBIDDEN,
+      message: `API key is not allowed to use provider: ${provider}`,
+    };
+  }
+
+  return { allowed: true };
+}
+
+/**
+ * Filter connections list by API key's allowedConnectionIds.
+ * If allowedConnectionIds is empty, returns all connections (unrestricted).
+ *
+ * @param {object} apiKeyRecord
+ * @param {Array} connections - list of connection objects with .id
+ * @returns {Array} filtered connections
+ */
+export function filterConnectionsByApiKey(apiKeyRecord, connections) {
+  if (!apiKeyRecord) return connections;
+  const connIds = Array.isArray(apiKeyRecord.allowedConnectionIds) ? apiKeyRecord.allowedConnectionIds : [];
+  if (connIds.length === 0) return connections;
+  const allowed = new Set(connIds);
+  return connections.filter((c) => allowed.has(c.id));
 }

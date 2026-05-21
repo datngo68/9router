@@ -194,6 +194,7 @@ export default function AdminApiKeysPage() {
             <Button size="sm" variant="ghost" onClick={() => setBulkModal({ kind: "expiry" })}>Hạn dùng</Button>
             <Button size="sm" variant="ghost" onClick={() => setBulkModal({ kind: "rateLimit" })}>Rate limit</Button>
             <Button size="sm" variant="ghost" onClick={() => setBulkModal({ kind: "models" })}>Models</Button>
+            <Button size="sm" variant="ghost" onClick={() => setBulkModal({ kind: "providerAccess" })}>Provider</Button>
             <Button
               size="sm"
               variant="ghost"
@@ -234,6 +235,7 @@ export default function AdminApiKeysPage() {
                   <SortHeader label="Hết hạn" col="expiresAt" sort={sort} order={order} onClick={changeSort} />
                   <th className="px-3 py-2 text-center">RTK</th>
                   <th className="px-3 py-2 text-center">Caveman</th>
+                  <th className="px-3 py-2 text-center">Provider</th>
                   <th className="px-3 py-2 text-center">Active</th>
                   <th className="px-3 py-2"></th>
                 </tr>
@@ -265,6 +267,9 @@ export default function AdminApiKeysPage() {
                       <ModeBadge value={k.cavemanMode} kind="caveman" />
                     </td>
                     <td className="px-3 py-2 text-center">
+                      <ProviderScopeBadge providers={k.allowedProviders} connections={k.allowedConnectionIds} />
+                    </td>
+                    <td className="px-3 py-2 text-center">
                       <Toggle checked={k.isActive} onChange={() => toggleActive(k)} size="sm" />
                     </td>
                     <td className="px-3 py-2 text-right whitespace-nowrap">
@@ -273,6 +278,9 @@ export default function AdminApiKeysPage() {
                       </Button>
                       <Button size="sm" variant="ghost" onClick={() => setSingleModal({ kind: "quota", key: k })}>
                         Quota
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setSingleModal({ kind: "providerAccess", key: k })}>
+                        Provider
                       </Button>
                       <Button
                         size="sm"
@@ -369,6 +377,20 @@ export default function AdminApiKeysPage() {
         modal={bulkModal?.kind === "models" ? { bulkCount: selected.size } : null}
         onClose={() => setBulkModal(null)}
         onSave={(payload) => runBulk("setAllowedModels", payload)}
+      />
+
+      <ProviderAccessModal
+        modal={singleModal?.kind === "providerAccess" ? singleModal : null}
+        onClose={() => setSingleModal(null)}
+        onSave={async (patch) => {
+          const ok = await patchKey(singleModal.key.id, patch);
+          if (ok) { notify("Đã cập nhật provider access."); setSingleModal(null); load(); }
+        }}
+      />
+      <ProviderAccessModal
+        modal={bulkModal?.kind === "providerAccess" ? { bulkCount: selected.size } : null}
+        onClose={() => setBulkModal(null)}
+        onSave={(payload) => runBulk("setProviderAccess", payload)}
       />
 
       <ConfirmModal isOpen={!!confirm} onClose={() => setConfirm(null)} onConfirm={confirm?.onConfirm} title={confirm?.title} message={confirm?.message} variant="danger" />
@@ -638,6 +660,154 @@ function ModelsModal({ modal, onClose, onSave }) {
           <input type="checkbox" checked={merge} onChange={(e) => setMerge(e.target.checked)} />
           <span>Merge với danh sách hiện tại (thay vì ghi đè)</span>
         </label>
+        <div className="flex gap-2">
+          <Button onClick={submit} fullWidth>Áp dụng</Button>
+          <Button onClick={onClose} variant="ghost" fullWidth>Hủy</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function ProviderScopeBadge({ providers, connections }) {
+  const p = Array.isArray(providers) ? providers : [];
+  const c = Array.isArray(connections) ? connections : [];
+  if (p.length === 0 && c.length === 0) {
+    return <span className="inline-block rounded-full px-2 py-0.5 text-[10px] uppercase bg-text-muted/15 text-text-muted">Tất cả</span>;
+  }
+  const parts = [];
+  if (p.length > 0) parts.push(`${p.length} prov`);
+  if (c.length > 0) parts.push(`${c.length} conn`);
+  return <span className="inline-block rounded-full px-2 py-0.5 text-[10px] uppercase bg-primary/15 text-primary">{parts.join(" · ")}</span>;
+}
+
+function ProviderAccessModal({ modal, onClose, onSave }) {
+  const [options, setOptions] = useState(null);
+  const [selectedProviders, setSelectedProviders] = useState([]);
+  const [selectedConnections, setSelectedConnections] = useState([]);
+  const [mode, setMode] = useState("set");
+
+  useEffect(() => {
+    if (!modal) return;
+    // Load provider options
+    fetch("/api/admin/provider-options", { cache: "no-store" })
+      .then((r) => r.json())
+      .then(setOptions)
+      .catch(() => setOptions({ providers: [], connections: [] }));
+    // Pre-fill from key if single
+    if (modal.key) {
+      setSelectedProviders(modal.key.allowedProviders || []);
+      setSelectedConnections(modal.key.allowedConnectionIds || []);
+      setMode("set");
+    } else {
+      setSelectedProviders([]);
+      setSelectedConnections([]);
+      setMode("set");
+    }
+  }, [modal]);
+
+  if (!modal) return null;
+  const isBulk = !modal.key;
+  const title = isBulk
+    ? `Provider access (${modal.bulkCount || 0} key)`
+    : `Provider access: ${modal.key.name || modal.key.keyDisplay}`;
+
+  function toggleProvider(id) {
+    setSelectedProviders((prev) =>
+      prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]
+    );
+  }
+
+  function toggleConnection(id) {
+    setSelectedConnections((prev) =>
+      prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]
+    );
+  }
+
+  function selectAllConnectionsOfProviders() {
+    if (!options) return;
+    const connIds = options.connections
+      .filter((c) => selectedProviders.includes(c.provider))
+      .map((c) => c.id);
+    setSelectedConnections((prev) => Array.from(new Set([...prev, ...connIds])));
+  }
+
+  function submit() {
+    const payload = { mode };
+    if (selectedProviders.length > 0 || !isBulk) payload.allowedProviders = selectedProviders;
+    if (selectedConnections.length > 0 || !isBulk) payload.allowedConnectionIds = selectedConnections;
+    onSave(payload);
+  }
+
+  return (
+    <Modal isOpen={!!modal} onClose={onClose} title={title}>
+      <div className="flex flex-col gap-4 max-h-[70vh] overflow-y-auto">
+        <p className="text-xs text-text-muted">
+          Để trống cả 2 danh sách = không giới hạn (dùng tất cả provider/connection).
+          Nếu chọn connection cụ thể, provider sẽ được suy ra tự động.
+        </p>
+
+        {isBulk && (
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="text-text-muted">Chế độ</span>
+            <select value={mode} onChange={(e) => setMode(e.target.value)} className="rounded-lg border border-border bg-bg px-3 py-2">
+              <option value="set">Ghi đè</option>
+              <option value="merge">Merge với danh sách hiện tại</option>
+            </select>
+          </label>
+        )}
+
+        {!options ? (
+          <div className="h-20 animate-pulse" />
+        ) : (
+          <>
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-sm font-medium">Providers ({selectedProviders.length}/{options.providers.length})</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {options.providers.map((p) => (
+                  <label key={p.id} className="flex items-center gap-1.5 text-sm cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selectedProviders.includes(p.id)}
+                      onChange={() => toggleProvider(p.id)}
+                    />
+                    <span>{p.name}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-sm font-medium">Connections ({selectedConnections.length}/{options.connections.length})</span>
+                {selectedProviders.length > 0 && (
+                  <button
+                    onClick={selectAllConnectionsOfProviders}
+                    className="text-xs text-primary hover:underline"
+                  >
+                    Chọn tất cả conn của provider đã chọn
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-col gap-1 max-h-48 overflow-y-auto">
+                {options.connections.map((c) => (
+                  <label key={c.id} className="flex items-center gap-1.5 text-sm cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selectedConnections.includes(c.id)}
+                      onChange={() => toggleConnection(c.id)}
+                    />
+                    <span>{c.name}</span>
+                    <span className="text-xs text-text-muted ml-1">({c.providerName})</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+
         <div className="flex gap-2">
           <Button onClick={submit} fullWidth>Áp dụng</Button>
           <Button onClick={onClose} variant="ghost" fullWidth>Hủy</Button>
