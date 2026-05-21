@@ -7,7 +7,7 @@ const { execSync } = require("child_process");
 const cliDir = path.resolve(__dirname, "..");
 const appDir = path.resolve(cliDir, "..");
 const rootDir = path.resolve(appDir, "..");
-const cliAppDir = path.join(cliDir, "app");
+let cliAppDir = path.join(cliDir, "app");
 const buildHomeDir = path.join(cliDir, ".build-home");
 const buildDistDirName = ".next-cli-build";
 const buildDistDir = path.join(appDir, buildDistDirName);
@@ -128,9 +128,23 @@ try {
 // Step 2: Clean old app/cli/app if exists
 console.log("2️⃣  Cleaning old app/cli/app...");
 if (fs.existsSync(cliAppDir)) {
-  fs.rmSync(cliAppDir, { recursive: true, force: true });
+  try {
+    fs.rmSync(cliAppDir, { recursive: true, force: true });
+    console.log("✅ Cleaned\n");
+  } catch (e) {
+    if (e.code === "EPERM" || e.code === "EBUSY") {
+      cliAppDir = path.join(cliDir, "app.new");
+      console.log(`⚠️  cli/app is locked (app running). Building into cli/app.new instead.`);
+      console.log(`   After stopping 9router, swap manually:`);
+      console.log(`     rmdir /s /q cli\\app && ren cli\\app.new app\n`);
+      if (fs.existsSync(cliAppDir)) fs.rmSync(cliAppDir, { recursive: true, force: true });
+    } else {
+      throw e;
+    }
+  }
+} else {
+  console.log("✅ Cleaned\n");
 }
-console.log("✅ Cleaned\n");
 
 // Step 3: Copy Next.js standalone build to app/cli/app.
 // Newer Next.js standalone output writes server.js/package.json plus .next/, src/, and

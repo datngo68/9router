@@ -472,6 +472,19 @@ function openBrowser(url) {
 
 // Find standalone server (bundled in bin/app for published package)
 const standaloneDir = path.join(__dirname, "app");
+const pendingDir = path.join(__dirname, "app.new");
+
+// Auto-swap: if app.new exists from a hot build, replace app with it
+if (fs.existsSync(pendingDir) && fs.existsSync(path.join(pendingDir, "server.js"))) {
+  try {
+    if (fs.existsSync(standaloneDir)) fs.rmSync(standaloneDir, { recursive: true, force: true });
+    fs.renameSync(pendingDir, standaloneDir);
+    console.log("✅ Applied pending build (app.new → app)");
+  } catch (e) {
+    console.warn(`⚠️  Could not swap app.new → app: ${e.message}`);
+  }
+}
+
 const serverPath = path.join(standaloneDir, "server.js");
 
 if (!fs.existsSync(serverPath)) {

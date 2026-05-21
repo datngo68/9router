@@ -20,6 +20,7 @@
 /.build-test-home/
 /out/
 cli/.build-home/
+cli/app.new/
 product
 # production
 /build
