@@ -63,7 +63,8 @@ function bgRefreshBin() {
     binCache.refreshing = false;
     return;
   }
-  execAsync("which tailscale 2>/dev/null || where tailscale 2>nul", { windowsHide: true, timeout: PROBE_TIMEOUT_MS })
+  const cmd = IS_WINDOWS ? "where tailscale 2>nul" : "which tailscale 2>/dev/null";
+  execAsync(cmd, { windowsHide: true, timeout: PROBE_TIMEOUT_MS })
     .then(({ stdout }) => {
       const sys = stdout.trim();
       binCache.value = sys || fallbackBin();
@@ -156,9 +157,10 @@ export function isTailscaleRunningStrict() {
   const bin = getTailscaleBin();
   if (!bin) return false;
   try {
-    const out = execSync(`"${bin}" ${SOCKET_FLAG.join(" ")} funnel status --json 2>/dev/null`, {
+    const out = execSync(`"${bin}" ${SOCKET_FLAG.join(" ")} funnel status --json`, {
       encoding: "utf8",
       windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"],
       timeout: PROBE_TIMEOUT_MS,
     });
     const json = JSON.parse(out);

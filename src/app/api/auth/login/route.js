@@ -6,10 +6,11 @@ import { cookies } from "next/headers";
 import { setDashboardAuthCookie } from "@/lib/auth/dashboardSession";
 import { isOidcConfigured } from "@/lib/auth/oidc";
 import { hasDefaultPassword, isAnyRemoteAccessEnabled } from "@/lib/security/tunnelGuard";
-import { checkLogin, recordFailure, clearFailures, getClientIp } from "@/lib/auth/loginThrottle";
+import { checkLock, recordFail, recordSuccess, getClientIp } from "@/lib/auth/loginLimiter";
 
 const BCRYPT_COST = 12;
 const MIN_PASSWORD_LENGTH = 8;
+const RESET_HINT = "Forgot password? Reset to default via 9Router CLI → Settings → Reset Password to Default.";
 
 function isTunnelRequest(request, settings) {
   // Prefer x-forwarded-host because cloudflared/reverse proxies typically
@@ -34,12 +35,11 @@ function safeEqual(a, b) {
 export async function POST(request) {
   try {
     const ip = getClientIp(request);
-    const lock = checkLogin(ip);
+    const lock = checkLock(ip);
     if (lock.locked) {
-      const retrySec = Math.max(1, Math.ceil(lock.retryAfterMs / 1000));
       return NextResponse.json(
-        { error: "Too many failed login attempts. Try again later." },
-        { status: 429, headers: { "Retry-After": String(retrySec) } }
+        { error: `Too many failed attempts. Try again in ${lock.retryAfter}s. ${RESET_HINT}`, retryAfter: lock.retryAfter, resetHint: RESET_HINT },
+        { status: 429, headers: { "Retry-After": String(lock.retryAfter) } }
       );
     }
 
@@ -95,21 +95,24 @@ export async function POST(request) {
     }
 
     if (isValid) {
+      recordSuccess(ip);
       const cookieStore = await cookies();
       await setDashboardAuthCookie(cookieStore, request);
-      clearFailures(ip);
       return NextResponse.json({ success: true });
     }
 
-    const failResult = recordFailure(ip);
-    if (failResult.locked) {
-      const retrySec = Math.max(1, Math.ceil(failResult.retryAfterMs / 1000));
+    const { remainingBeforeLock } = recordFail(ip);
+    const postLock = checkLock(ip);
+    if (postLock.locked) {
       return NextResponse.json(
-        { error: "Too many failed login attempts. Locked out for 15 minutes." },
-        { status: 429, headers: { "Retry-After": String(retrySec) } }
+        { error: `Too many failed attempts. Try again in ${postLock.retryAfter}s. ${RESET_HINT}`, retryAfter: postLock.retryAfter, resetHint: RESET_HINT },
+        { status: 429, headers: { "Retry-After": String(postLock.retryAfter) } }
       );
     }
-    return NextResponse.json({ error: "Invalid password" }, { status: 401 });
+    return NextResponse.json(
+      { error: `Invalid password. ${remainingBeforeLock} attempt(s) left before lockout.`, remainingBeforeLock },
+      { status: 401 }
+    );
   } catch (error) {
     console.error("[auth/login] error:", error?.message || error);
     return NextResponse.json({ error: "Login failed" }, { status: 500 });

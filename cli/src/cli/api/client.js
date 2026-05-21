@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
+const { machineIdSync } = require("node-machine-id");
 
 // Default configuration
 const DEFAULT_CONFIG = {
@@ -13,6 +14,7 @@ const DEFAULT_CONFIG = {
 };
 
 const CLI_TOKEN_HEADER = "x-9r-cli-token";
+const CLI_TOKEN_SALT = "9r-cli-auth";
 const APP_NAME = "9router";
 
 function getDataDir() {
@@ -23,32 +25,44 @@ function getDataDir() {
   return path.join(os.homedir(), `.${APP_NAME}`);
 }
 
-const CLI_TOKEN_FILE = path.join(getDataDir(), "cli-token");
+const MACHINE_ID_FILE = path.join(getDataDir(), "machine-id");
+const AUTH_DIR = path.join(getDataDir(), "auth");
+const CLI_SECRET_FILE = path.join(AUTH_DIR, "cli-secret");
 
 let config = { ...DEFAULT_CONFIG };
 let cachedCliToken = null;
+let cachedCliSecret = null;
 
-// Read the persisted CLI token written by the dashboard.
-// If the file isn't present yet (server has never been started), generate one
-// and persist it so the dashboard picks it up on next start.
+// Read raw machineId from shared file (written by server) → guarantees token match
+function loadRawMachineId() {
+  try {
+    const raw = fs.readFileSync(MACHINE_ID_FILE, "utf8").trim();
+    if (raw) return raw;
+  } catch {}
+  try { return machineIdSync(); } catch { return ""; }
+}
+
+// Random secret shared with server via file → token unpredictable from machineId alone.
+function loadCliSecret() {
+  if (cachedCliSecret) return cachedCliSecret;
+  try {
+    cachedCliSecret = fs.readFileSync(CLI_SECRET_FILE, "utf8").trim();
+    if (cachedCliSecret) return cachedCliSecret;
+  } catch {}
+  cachedCliSecret = crypto.randomBytes(32).toString("hex");
+  try {
+    fs.mkdirSync(AUTH_DIR, { recursive: true });
+    fs.writeFileSync(CLI_SECRET_FILE, cachedCliSecret, { mode: 0o600 });
+  } catch {}
+  return cachedCliSecret;
+}
+
 function getCliToken() {
   if (cachedCliToken !== null) return cachedCliToken;
-  try {
-    const raw = fs.readFileSync(CLI_TOKEN_FILE, "utf8").trim();
-    if (raw) {
-      cachedCliToken = raw;
-      return cachedCliToken;
-    }
-  } catch {}
-  try {
-    cachedCliToken = crypto.randomBytes(32).toString("hex");
-    fs.mkdirSync(getDataDir(), { recursive: true });
-    fs.writeFileSync(CLI_TOKEN_FILE, cachedCliToken, { mode: 0o600 });
-    return cachedCliToken;
-  } catch {
-    cachedCliToken = "";
-    return cachedCliToken;
-  }
+  const raw = loadRawMachineId();
+  const secret = loadCliSecret();
+  cachedCliToken = raw ? crypto.createHash("sha256").update(raw + CLI_TOKEN_SALT + secret).digest("hex").substring(0, 16) : "";
+  return cachedCliToken;
 }
 
 /**
