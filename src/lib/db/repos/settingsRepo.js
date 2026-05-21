@@ -89,6 +89,11 @@ const DEFAULT_SETTINGS = {
   paygMinChargeVnd: 1,
   paygMarkupMultiplier: 1.5,
   paygFxVndPerUsd: 26000,
+  // Token multipliers — scale ingested usage tokens before saving. Applied
+  // at saveRequestUsage time so quota (daily/monthly/lifetime), cost USD,
+  // and PAYG VND debit all see the scaled values. 1.0 = no-op (default).
+  tokenInputMultiplier: 1.0,
+  tokenOutputMultiplier: 1.0,
 };
 
 async function readRaw() {

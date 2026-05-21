@@ -66,6 +66,11 @@ const WALLET_FIELDS = [
   { key: "paygFxVndPerUsd", label: "Tỷ giá USD→VND (gợi ý giá)", type: "number", placeholder: "26000", hint: "Chỉ dùng cho UI gợi ý giá PAYG từ pricing.js." },
 ];
 
+const TOKEN_MULTIPLIER_FIELDS = [
+  { key: "tokenInputMultiplier", label: "Hệ số token input", type: "number", step: "0.01", placeholder: "1.0", hint: "Nhân vào prompt/input tokens trước khi lưu. Áp dụng cho quota, cost USD, và PAYG ví. 1.0 = giữ nguyên." },
+  { key: "tokenOutputMultiplier", label: "Hệ số token output", type: "number", step: "0.01", placeholder: "1.0", hint: "Nhân vào completion/output tokens (cả reasoning) trước khi lưu. 1.0 = giữ nguyên." },
+];
+
 export default function StoreSettingsPage() {
   const [settings, setSettings] = useState({});
   const [banks, setBanks] = useState([]);
@@ -248,7 +253,7 @@ export default function StoreSettingsPage() {
     try { navigator.clipboard.writeText(value); } catch {}
   }
 
-  function field({ key, label, type = "text", placeholder, textarea, hint }) {
+  function field({ key, label, type = "text", placeholder, textarea, hint, step }) {
     const value = settings[key] ?? "";
     if (textarea) {
       return (
@@ -267,6 +272,7 @@ export default function StoreSettingsPage() {
     }
     return (
       <Input key={key} label={label} type={type} value={value} placeholder={placeholder}
+        step={step}
         onChange={(e) => setSettings({ ...settings, [key]: type === "number" ? Number(e.target.value) : e.target.value })} hint={hint} />
     );
   }
@@ -509,6 +515,22 @@ export default function StoreSettingsPage() {
             paygMarkupMultiplier: Number(settings.paygMarkupMultiplier) || 1,
             paygFxVndPerUsd: Number(settings.paygFxVndPerUsd) || 0,
           })} disabled={busy}>Lưu Wallet & PAYG</Button>
+        </div>
+      </Card>
+
+      <Card>
+        <div className="mb-3">
+          <h2 className="font-semibold">Hệ số token (input / output)</h2>
+          <p className="text-xs text-text-muted">Nhân vào số token THỰC nhận từ provider trước khi lưu DB. Áp dụng đồng bộ cho quota (daily/monthly/lifetime), cost USD hiển thị, và trừ ví PAYG. Đặt 1.0 nếu muốn giữ nguyên số gốc của provider.</p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {TOKEN_MULTIPLIER_FIELDS.map((f) => field(f))}
+        </div>
+        <div className="mt-4 flex gap-3">
+          <Button onClick={() => save({
+            tokenInputMultiplier: Number(settings.tokenInputMultiplier) || 1,
+            tokenOutputMultiplier: Number(settings.tokenOutputMultiplier) || 1,
+          })} disabled={busy}>Lưu hệ số token</Button>
         </div>
       </Card>
 

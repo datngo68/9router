@@ -18,6 +18,107 @@ export const COLORS = {
 // Buffer tokens to prevent context errors
 const BUFFER_TOKENS = 2000;
 
+// ─── Token multiplier cache ────────────────────────────────────────────
+// Settings are admin-configured and rarely change. Cache them for 5s and
+// refresh in the background so the streaming hot path stays sync.
+const MULTIPLIER_CACHE_TTL_MS = 5000;
+let _multiplierCache = { inMul: 1, outMul: 1, expiresAt: 0 };
+let _refreshingMultipliers = false;
+
+function refreshMultipliersAsync() {
+  if (_refreshingMultipliers) return;
+  _refreshingMultipliers = true;
+  import("@/lib/db/repos/settingsRepo.js")
+    .then(({ getSettings }) => getSettings())
+    .then((s) => {
+      const inMul = Number(s?.tokenInputMultiplier);
+      const outMul = Number(s?.tokenOutputMultiplier);
+      _multiplierCache = {
+        inMul: Number.isFinite(inMul) && inMul >= 0 ? inMul : 1,
+        outMul: Number.isFinite(outMul) && outMul >= 0 ? outMul : 1,
+        expiresAt: Date.now() + MULTIPLIER_CACHE_TTL_MS,
+      };
+    })
+    .catch(() => {})
+    .finally(() => { _refreshingMultipliers = false; });
+}
+
+/**
+ * Sync getter — returns last cached multipliers and triggers background
+ * refresh when stale. First call (before refresh resolves) returns 1.0/1.0.
+ */
+export function getTokenMultipliersSync() {
+  if (Date.now() > _multiplierCache.expiresAt) {
+    refreshMultipliersAsync();
+  }
+  return { inMul: _multiplierCache.inMul, outMul: _multiplierCache.outMul };
+}
+
+/**
+ * Scale a usage object by admin-configured input/output multipliers so the
+ * client sees the same scaled numbers we persist to DB. Handles all known
+ * shapes (Claude / OpenAI / Gemini / Responses) and nested details.
+ *
+ * Recomputes total_tokens from scaled prompt+completion when present so the
+ * sum stays consistent.
+ */
+export function applyTokenMultipliersToUsage(usage) {
+  if (!usage || typeof usage !== "object") return usage;
+  const { inMul, outMul } = getTokenMultipliersSync();
+  if (inMul === 1 && outMul === 1) return usage;
+
+  const scale = (val, mul) => {
+    const n = Number(val);
+    if (!Number.isFinite(n) || n <= 0) return val;
+    return Math.round(n * mul);
+  };
+
+  const out = { ...usage };
+
+  // OpenAI shape
+  if (out.prompt_tokens !== undefined) out.prompt_tokens = scale(out.prompt_tokens, inMul);
+  if (out.completion_tokens !== undefined) out.completion_tokens = scale(out.completion_tokens, outMul);
+  if (out.cached_tokens !== undefined) out.cached_tokens = scale(out.cached_tokens, inMul);
+  if (out.reasoning_tokens !== undefined) out.reasoning_tokens = scale(out.reasoning_tokens, outMul);
+
+  // Claude shape
+  if (out.input_tokens !== undefined) out.input_tokens = scale(out.input_tokens, inMul);
+  if (out.output_tokens !== undefined) out.output_tokens = scale(out.output_tokens, outMul);
+  if (out.cache_read_input_tokens !== undefined) out.cache_read_input_tokens = scale(out.cache_read_input_tokens, inMul);
+  if (out.cache_creation_input_tokens !== undefined) out.cache_creation_input_tokens = scale(out.cache_creation_input_tokens, inMul);
+
+  // Nested details (OpenAI)
+  if (out.prompt_tokens_details && typeof out.prompt_tokens_details === "object") {
+    const d = { ...out.prompt_tokens_details };
+    if (d.cached_tokens !== undefined) d.cached_tokens = scale(d.cached_tokens, inMul);
+    out.prompt_tokens_details = d;
+  }
+  if (out.completion_tokens_details && typeof out.completion_tokens_details === "object") {
+    const d = { ...out.completion_tokens_details };
+    if (d.reasoning_tokens !== undefined) d.reasoning_tokens = scale(d.reasoning_tokens, outMul);
+    out.completion_tokens_details = d;
+  }
+  if (out.input_tokens_details && typeof out.input_tokens_details === "object") {
+    const d = { ...out.input_tokens_details };
+    if (d.cached_tokens !== undefined) d.cached_tokens = scale(d.cached_tokens, inMul);
+    out.input_tokens_details = d;
+  }
+  if (out.output_tokens_details && typeof out.output_tokens_details === "object") {
+    const d = { ...out.output_tokens_details };
+    if (d.reasoning_tokens !== undefined) d.reasoning_tokens = scale(d.reasoning_tokens, outMul);
+    out.output_tokens_details = d;
+  }
+
+  // Re-derive total_tokens from scaled prompt+completion when present
+  if (out.total_tokens !== undefined) {
+    const inT = Number(out.prompt_tokens ?? out.input_tokens ?? 0) || 0;
+    const outT = Number(out.completion_tokens ?? out.output_tokens ?? 0) || 0;
+    if (inT || outT) out.total_tokens = inT + outT;
+  }
+
+  return out;
+}
+
 // Get HH:MM:SS timestamp
 function getTimeString() {
   return new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });

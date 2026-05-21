@@ -255,14 +255,64 @@ export async function getActiveRequests() {
   return { activeRequests, recentRequests, errorProvider };
 }
 
+/**
+ * Scale ingested usage tokens by admin-configured multipliers before they are
+ * persisted. Applies to all input/output sub-fields so cost, quota, and PAYG
+ * billing all see the scaled numbers consistently.
+ *
+ * Both multipliers default to 1.0 (no-op). Values < 0 are clamped to 0.
+ * Returns a new tokens object — never mutates the caller's input.
+ */
+function applyTokenMultipliers(tokens, inputMul, outputMul) {
+  if (!tokens || typeof tokens !== "object") return tokens;
+  const inMul = Number.isFinite(inputMul) && inputMul >= 0 ? inputMul : 1;
+  const outMul = Number.isFinite(outputMul) && outputMul >= 0 ? outputMul : 1;
+  if (inMul === 1 && outMul === 1) return tokens;
+
+  const scale = (val, mul) => {
+    const n = Number(val);
+    if (!Number.isFinite(n) || n <= 0) return val;
+    return Math.round(n * mul);
+  };
+
+  // Input-side fields
+  const INPUT_FIELDS = ["prompt_tokens", "input_tokens", "cached_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"];
+  // Output-side fields
+  const OUTPUT_FIELDS = ["completion_tokens", "output_tokens", "reasoning_tokens"];
+
+  const scaled = { ...tokens };
+  for (const f of INPUT_FIELDS) {
+    if (scaled[f] !== undefined) scaled[f] = scale(scaled[f], inMul);
+  }
+  for (const f of OUTPUT_FIELDS) {
+    if (scaled[f] !== undefined) scaled[f] = scale(scaled[f], outMul);
+  }
+  return scaled;
+}
+
 export async function saveRequestUsage(entry) {
   try {
     const db = await getAdapter();
 
     if (!entry.timestamp) entry.timestamp = new Date().toISOString();
-    entry.cost = await calculateCost(entry.provider, entry.model, entry.tokens);
 
-    const tokens = entry.tokens || {};
+    // Apply admin token multipliers BEFORE cost/PAYG/normalize so everything
+    // downstream (cost USD, daily/monthly/lifetime quota, wallet debit) reads
+    // the same scaled numbers. Multipliers default to 1.0 → no-op.
+    let tokens = entry.tokens || {};
+    try {
+      const { getSettings } = await import("./settingsRepo.js");
+      const settings = await getSettings();
+      const inMul = Number(settings.tokenInputMultiplier);
+      const outMul = Number(settings.tokenOutputMultiplier);
+      tokens = applyTokenMultipliers(tokens, inMul, outMul);
+      entry.tokens = tokens;
+    } catch (e) {
+      console.error("[usageRepo] tokenMultiplier load failed:", e?.message || e);
+    }
+
+    entry.cost = await calculateCost(entry.provider, entry.model, tokens);
+
     const { promptTokens, completionTokens } = normalizeUsageTokens(tokens);
 
     // PAYG: resolve VND cost BEFORE opening the transaction so we can fail

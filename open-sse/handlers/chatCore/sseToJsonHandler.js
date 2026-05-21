@@ -4,6 +4,7 @@ import { HTTP_STATUS } from "../../config/runtimeConfig.js";
 import { FORMATS } from "../../translator/formats.js";
 import { buildRequestDetail, extractRequestConfig, saveUsageStats } from "./requestDetail.js";
 import { saveRequestDetail, appendRequestLog } from "@/lib/usageDb.js";
+import { applyTokenMultipliersToUsage } from "../../utils/usageTracking.js";
 
 function textFromResponsesMessageItem(item) {
   if (!item?.content || !Array.isArray(item.content)) return "";
@@ -133,14 +134,23 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, pr
         status: "success"
       }, { endpoint: clientRawRequest?.endpoint || null })).catch(() => {});
 
-      // Client is Responses API → return as-is
+      // Client is Responses API → return as-is (apply multiplier on its
+      // own usage shape so client sees scaled numbers).
       if (sourceFormat === FORMATS.OPENAI_RESPONSES) {
+        if (jsonResponse.usage) {
+          jsonResponse.usage = applyTokenMultipliersToUsage(jsonResponse.usage);
+        }
         return { success: true, response: new Response(JSON.stringify(jsonResponse), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }) };
       }
 
-      // Build client-format response
-      const inTokens = usage.input_tokens || 0;
-      const outTokens = usage.output_tokens || 0;
+      // Build client-format response — apply token multipliers so client
+      // sees the same scaled numbers we persist to DB.
+      const scaledForClient = applyTokenMultipliersToUsage({
+        input_tokens: usage.input_tokens || 0,
+        output_tokens: usage.output_tokens || 0,
+      });
+      const inTokens = scaledForClient.input_tokens || 0;
+      const outTokens = scaledForClient.output_tokens || 0;
       let finalResp;
 
       // Extract tool calls from Responses API output (function_call items)
@@ -220,6 +230,12 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, pr
           delete choice.message.reasoning_content;
         }
       }
+    }
+
+    // Apply admin token multipliers to client-facing usage so it matches
+    // what we persist to DB.
+    if (parsed.usage) {
+      parsed.usage = applyTokenMultipliersToUsage(parsed.usage);
     }
 
     return { success: true, response: new Response(JSON.stringify(parsed), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }) };

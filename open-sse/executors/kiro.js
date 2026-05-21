@@ -3,6 +3,7 @@ import { PROVIDERS } from "../config/providers.js";
 import { v4 as uuidv4 } from "uuid";
 import { refreshKiroToken } from "../services/tokenRefresh.js";
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
+import { applyTokenMultipliersToUsage } from "../utils/usageTracking.js";
 import { HTTP_STATUS, RETRY_CONFIG, DEFAULT_RETRY_CONFIG, resolveRetryEntry } from "../config/runtimeConfig.js";
 
 /**
@@ -361,9 +362,10 @@ export class KiroExecutor extends BaseExecutor {
               }]
             };
             
-            // Include usage in final chunk if available
+            // Include usage in final chunk if available (apply admin token
+            // multipliers so client sees the same scaled numbers we persist).
             if (state.usage) {
-              finishChunk.usage = state.usage;
+              finishChunk.usage = applyTokenMultipliersToUsage(state.usage);
             }
             
             controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(finishChunk)}\n\n`));
