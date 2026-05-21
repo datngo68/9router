@@ -113,6 +113,7 @@ try {
       USERPROFILE: buildHomeDir,
       APPDATA: path.join(buildHomeDir, "AppData", "Roaming"),
       LOCALAPPDATA: path.join(buildHomeDir, "AppData", "Local"),
+      DATA_DIR: "",
       NEXT_DIST_DIR: buildDistDirName,
       NEXT_TRACING_ROOT_MODE: "workspace",
       NINE_ROUTER_SKIP_SYSTEM_TAILSCALE_PROBE: "1",
