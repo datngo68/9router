@@ -32,16 +32,33 @@ async function ensureInitialized() {
 // Map full model id (e.g. "cx/gpt-5.5-image") → kind ("llm" | "image" | ...).
 // Falls back to "llm" when the model isn't in catalog so we don't break custom
 // providers; the downstream handler will surface a clearer error.
+//
+// Bare ids (no `/`) are also supported: scan every catalog alias for a unique
+// match. Multi-match ambiguity is left to handleChat to surface — we only need
+// the kind here to decide the forward route.
 function detectModelKind(fullId) {
   if (typeof fullId !== "string") return "llm";
   const slash = fullId.indexOf("/");
-  if (slash <= 0) return "llm";
-  const alias = fullId.slice(0, slash);
-  const id = fullId.slice(slash + 1);
-  const list = PROVIDER_MODELS[alias];
-  if (!Array.isArray(list)) return "llm";
-  const m = list.find((x) => x.id === id);
-  return m?.type || "llm";
+  if (slash > 0) {
+    const alias = fullId.slice(0, slash);
+    const id = fullId.slice(slash + 1);
+    const list = PROVIDER_MODELS[alias];
+    if (!Array.isArray(list)) return "llm";
+    const m = list.find((x) => x.id === id);
+    return m?.type || "llm";
+  }
+  // No prefix — peek across the catalog. If every match shares the same kind
+  // we can use it; otherwise default to "llm" and let the bare-id resolver in
+  // handleChat report the conflict.
+  const kinds = new Set();
+  for (const list of Object.values(PROVIDER_MODELS)) {
+    if (!Array.isArray(list)) continue;
+    for (const m of list) {
+      if (m?.id === fullId) kinds.add(m.type || "llm");
+    }
+  }
+  if (kinds.size === 1) return kinds.values().next().value;
+  return "llm";
 }
 
 export async function OPTIONS(request) {

@@ -238,6 +238,68 @@ export async function getModelInfoCore(modelStr, aliasesOrGetter) {
 }
 
 /**
+ * Build reverse index { bareModelId -> Set<providerAlias> } limited to
+ * the aliases that have an active connection. Custom-models keyed by
+ * `providerAlias` are merged in alongside the static catalog.
+ *
+ * @param {object} providerModels - PROVIDER_MODELS-shaped catalog (alias -> [{id,...}])
+ * @param {string[]} availableAliases - aliases that should participate in the index
+ * @param {Array<{id: string, providerAlias: string, type?: string}>} customModels
+ * @returns {Map<string, Set<string>>}
+ */
+export function buildBareModelIndex(providerModels, availableAliases, customModels = []) {
+  const allowed = new Set((availableAliases || []).filter(Boolean));
+  const index = new Map();
+
+  const add = (alias, modelId) => {
+    if (!alias || !modelId || !allowed.has(alias)) return;
+    if (!index.has(modelId)) index.set(modelId, new Set());
+    index.get(modelId).add(alias);
+  };
+
+  for (const [alias, models] of Object.entries(providerModels || {})) {
+    if (!Array.isArray(models)) continue;
+    for (const model of models) {
+      if (model?.id) add(alias, model.id);
+    }
+  }
+
+  for (const cm of customModels || []) {
+    if (!cm?.id || !cm.providerAlias) continue;
+    if (cm.type && cm.type !== "llm") continue;
+    add(cm.providerAlias, String(cm.id).trim());
+  }
+
+  return index;
+}
+
+/**
+ * Resolve a bare model id (no `/`) against a prebuilt reverse index.
+ * Returns:
+ *   - { provider, model, providerAlias }                  when exactly one match
+ *   - { ambiguous: true, candidates: [...aliases], model } when >1 match
+ *   - null                                                when no match
+ */
+export function resolveBareModelId(modelId, index) {
+  if (!modelId || !index || typeof index.get !== "function") return null;
+  const aliases = index.get(modelId);
+  if (!aliases || aliases.size === 0) return null;
+  if (aliases.size > 1) {
+    return {
+      ambiguous: true,
+      candidates: Array.from(aliases).sort(),
+      model: modelId,
+    };
+  }
+  const [alias] = aliases;
+  return {
+    provider: resolveProviderAlias(alias),
+    providerAlias: alias,
+    model: modelId,
+  };
+}
+
+/**
  * Infer provider from model name prefix
  * Used as fallback when no provider prefix or alias is given
  */

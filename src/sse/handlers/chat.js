@@ -9,7 +9,7 @@ import {
 } from "../services/auth.js";
 import { cacheClaudeHeaders } from "open-sse/utils/claudeHeaderCache.js";
 import { getSettings } from "@/lib/localDb";
-import { getModelInfo, getComboModels } from "../services/model.js";
+import { getModelInfo, getComboModels, resolveBareModel } from "../services/model.js";
 import { handleChatCore } from "open-sse/handlers/chatCore.js";
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
 import { handleComboChat } from "open-sse/services/combo.js";
@@ -287,6 +287,16 @@ async function dispatchChat({ body, modelStr, request, clientRawRequest, setting
   if (comboModels) {
     const modelCheck = checkApiKeyComboModelAccess(apiKeyRecord, modelStr, comboModels);
     if (!modelCheck.allowed) {
+      // Combo is denied for this key — but the same name may also exist as a
+      // bare model id in the catalog (e.g. user named a combo "gpt-5.5" that
+      // shadows cx/gpt-5.5). Fall through to the single-model path so the
+      // model-level access check decides, instead of dead-ending the request.
+      const bare = await resolveBareModel(modelStr);
+      if (bare && !bare.ambiguous && bare.provider) {
+        const rewritten = `${bare.providerAlias}/${bare.model}`;
+        log.warn("AUTH", `${modelCheck.message} — falling back to ${rewritten}`);
+        return handleSingleModelChat(body, rewritten, clientRawRequest, request, apiKeyId, apiKeyRecord);
+      }
       log.warn("AUTH", modelCheck.message);
       return errorResponse(modelCheck.status, modelCheck.message);
     }
@@ -319,6 +329,17 @@ async function dispatchChat({ body, modelStr, request, clientRawRequest, setting
 async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKeyId = null, apiKeyRecord = null) {
   const modelInfo = await getModelInfo(modelStr);
 
+  // Bare id matched several active providers — surface a clear hint instead
+  // of guessing.
+  if (modelInfo.ambiguous) {
+    const hint = modelInfo.ambiguous.candidates.map((a) => `${a}/${modelStr}`).join(", ");
+    log.warn("CHAT", `Ambiguous model id "${modelStr}" — candidates: ${hint}`);
+    return errorResponse(
+      HTTP_STATUS.BAD_REQUEST,
+      `Ambiguous model id "${modelStr}". Please prefix with one of: ${hint}`
+    );
+  }
+
   // If provider is null, this might be a combo name - check and handle
   if (!modelInfo.provider) {
     const comboModels = await getComboModels(modelStr);
@@ -340,6 +361,13 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         comboStrategy,
         comboStickyLimit
       });
+    }
+    if (modelInfo.unresolved) {
+      log.warn("CHAT", `Unresolved model "${modelStr}" — no active connection owns this id`);
+      return errorResponse(
+        HTTP_STATUS.BAD_REQUEST,
+        `Model "${modelStr}" is not available. Add a provider connection that exposes this model, or prefix the id (e.g. cx/${modelStr}).`
+      );
     }
     log.warn("CHAT", "Invalid model format", { model: modelStr });
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid model format");

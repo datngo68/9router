@@ -66,6 +66,19 @@ export async function handleTts(request) {
 
 async function handleSingleModelTts(body, modelStr, responseFormat, language) {
   const modelInfo = await getModelInfo(modelStr);
+  if (modelInfo.ambiguous) {
+    const hint = modelInfo.ambiguous.candidates.map((a) => `${a}/${modelStr}`).join(", ");
+    return errorResponse(
+      HTTP_STATUS.BAD_REQUEST,
+      `Ambiguous model id "${modelStr}". Please prefix with one of: ${hint}`
+    );
+  }
+  if (modelInfo.unresolved) {
+    return errorResponse(
+      HTTP_STATUS.BAD_REQUEST,
+      `Model "${modelStr}" is not available. Add a provider connection that exposes this model, or prefix the id.`
+    );
+  }
   if (!modelInfo.provider) return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid model format");
 
   const { provider, model } = modelInfo;

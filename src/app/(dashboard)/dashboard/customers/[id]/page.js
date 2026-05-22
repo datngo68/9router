@@ -31,9 +31,9 @@ export default function AdminCustomerDetailPage() {
   const [notes, setNotes] = useState("");
   const [savedMsg, setSavedMsg] = useState("");
   const [confirm, setConfirm] = useState(null);
-  const [quotaModal, setQuotaModal] = useState(null);
-  const [compressModal, setCompressModal] = useState(null);
-  const [providerModal, setProviderModal] = useState(null);
+  const [editingKey, setEditingKey] = useState(null); // { key, tab }
+  const [bulkModal, setBulkModal] = useState(null); // { kind: 'compress'|'quota'|'expiry'|'rateLimit'|'models'|'providerAccess' }
+  const [selectedKeys, setSelectedKeys] = useState(() => new Set());
   const [toast, setToast] = useState("");
 
   async function load() {
@@ -41,6 +41,9 @@ export default function AdminCustomerDetailPage() {
     const d = await r.json();
     setData(d);
     setNotes(d.customer?.notes || "");
+    // drop selections that no longer match keys belonging to this customer
+    const visible = new Set((d.keys || []).map((k) => k.id));
+    setSelectedKeys((prev) => new Set([...prev].filter((kid) => visible.has(kid))));
   }
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [id]);
 
@@ -57,6 +60,21 @@ export default function AdminCustomerDetailPage() {
 
   async function toggleKey(keyId) {
     await fetch(`/api/admin/customers/${id}/api-keys/${keyId}/toggle`, { method: "POST" });
+    load();
+  }
+
+  async function runBulk(action, payload) {
+    const ids = Array.from(selectedKeys);
+    if (ids.length === 0) return;
+    const res = await fetch("/api/admin/api-keys/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids, action, payload }),
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) { notify(d?.error || "Bulk thất bại"); return; }
+    notify(`Đã cập nhật ${d.updated || 0} key.`);
+    setBulkModal(null);
     load();
   }
 
@@ -118,10 +136,30 @@ export default function AdminCustomerDetailPage() {
       {tab === "keys" && (
         <KeysTab
           keys={keys}
+          keyLimitsUsage={keyLimitsUsage}
+          selected={selectedKeys}
+          onToggleSelect={(keyId) => {
+            setSelectedKeys((prev) => {
+              const next = new Set(prev);
+              if (next.has(keyId)) next.delete(keyId); else next.add(keyId);
+              return next;
+            });
+          }}
+          onToggleSelectAll={(visibleKeys) => {
+            if (!visibleKeys || visibleKeys.length === 0) return;
+            const all = visibleKeys.every((k) => selectedKeys.has(k.id));
+            setSelectedKeys(() => {
+              const next = new Set(selectedKeys);
+              if (all) visibleKeys.forEach((k) => next.delete(k.id));
+              else visibleKeys.forEach((k) => next.add(k.id));
+              return next;
+            });
+          }}
+          onClearSelection={() => setSelectedKeys(new Set())}
+          onBulk={(kind) => setBulkModal({ kind })}
+          onBulkToggleActive={(isActive) => runBulk("toggleActive", { isActive })}
           onToggle={toggleKey}
-          onOpenQuota={(k) => setQuotaModal({ key: k, mode: "add", dailyTokenLimit: 0, monthlyTokenLimit: 0, lifetimeTokenLimit: 0, extendDays: 0 })}
-          onOpenCompress={(k) => setCompressModal({ key: k })}
-          onOpenProvider={(k) => setProviderModal({ key: k })}
+          onEdit={(k, initialTab) => setEditingKey({ key: k, tab: initialTab || "limits" })}
         />
       )}
       {tab === "actions" && (
@@ -134,55 +172,55 @@ export default function AdminCustomerDetailPage() {
         />
       )}
 
-      <QuotaModal
-        modal={quotaModal}
-        onClose={() => setQuotaModal(null)}
-        onSave={async (payload) => {
-          const res = await fetch(`/api/admin/customers/${id}/api-keys/${quotaModal.key.id}/quota`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          });
-          const d = await res.json().catch(() => ({}));
-          if (!res.ok) { notify(d?.error || "Lỗi cập nhật quota"); return; }
-          setQuotaModal(null);
-          notify("Đã cập nhật quota.");
+      <EditKeyModal
+        modal={editingKey}
+        customerId={id}
+        onClose={() => setEditingKey(null)}
+        onSaved={(msg) => {
+          notify(msg || "Đã cập nhật.");
+          setEditingKey(null);
           load();
         }}
+        onError={(msg) => notify(msg)}
       />
 
+      {/* Bulk modals: trigger by selecting rows + bulk toolbar */}
       <CompressModal
-        modal={compressModal}
-        onClose={() => setCompressModal(null)}
-        onSave={async (payload) => {
-          const res = await fetch(`/api/admin/api-keys/${compressModal.key.id}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          });
-          const d = await res.json().catch(() => ({}));
-          if (!res.ok) { notify(d?.error || "Lỗi cập nhật compress"); return; }
-          setCompressModal(null);
-          notify("Đã cập nhật compress.");
-          load();
+        modal={bulkModal?.kind === "compress" ? { bulkCount: selectedKeys.size } : null}
+        onClose={() => setBulkModal(null)}
+        onSave={(payload) => runBulk("setCompress", payload)}
+      />
+      <BulkQuotaModal
+        modal={bulkModal?.kind === "quota" ? { bulkCount: selectedKeys.size } : null}
+        onClose={() => setBulkModal(null)}
+        onSave={(payload) => {
+          const out = { mode: payload.mode };
+          for (const f of ["dailyTokenLimit", "monthlyTokenLimit", "lifetimeTokenLimit"]) {
+            if (Number(payload[f]) > 0) out[f] = Number(payload[f]);
+          }
+          if (Object.keys(out).length <= 1) { notify("Chưa nhập field quota."); return; }
+          runBulk("setQuota", out);
         }}
       />
-
+      <ExpiryModal
+        modal={bulkModal?.kind === "expiry" ? { bulkCount: selectedKeys.size } : null}
+        onClose={() => setBulkModal(null)}
+        onSave={(payload) => runBulk("setExpiry", payload)}
+      />
+      <RateLimitModal
+        modal={bulkModal?.kind === "rateLimit" ? { bulkCount: selectedKeys.size } : null}
+        onClose={() => setBulkModal(null)}
+        onSave={(payload) => runBulk("setRateLimit", payload)}
+      />
+      <ModelsModal
+        modal={bulkModal?.kind === "models" ? { bulkCount: selectedKeys.size } : null}
+        onClose={() => setBulkModal(null)}
+        onSave={(payload) => runBulk("setAllowedModels", payload)}
+      />
       <ProviderAccessModal
-        modal={providerModal}
-        onClose={() => setProviderModal(null)}
-        onSave={async (payload) => {
-          const res = await fetch(`/api/admin/api-keys/${providerModal.key.id}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          });
-          const d = await res.json().catch(() => ({}));
-          if (!res.ok) { notify(d?.error || "Lỗi cập nhật provider access"); return; }
-          setProviderModal(null);
-          notify("Đã cập nhật provider access.");
-          load();
-        }}
+        modal={bulkModal?.kind === "providerAccess" ? { bulkCount: selectedKeys.size } : null}
+        onClose={() => setBulkModal(null)}
+        onSave={(payload) => runBulk("setProviderAccess", payload)}
       />
 
       <ConfirmModal isOpen={!!confirm} onClose={() => setConfirm(null)} onConfirm={confirm?.onConfirm} title={confirm?.title} message={confirm?.message} />
@@ -664,54 +702,233 @@ function VoucherTab({ redemptions }) {
   );
 }
 
-function KeysTab({ keys, onToggle, onOpenQuota, onOpenCompress, onOpenProvider }) {
+const KEY_FILTERS = [
+  { id: "all", label: "Tất cả" },
+  { id: "active", label: "Đang dùng" },
+  { id: "inactive", label: "Đã tắt" },
+  { id: "expiringSoon", label: "Sắp hết hạn" },
+  { id: "expired", label: "Hết hạn" },
+  { id: "nearLimit", label: "Gần limit" },
+];
+
+function getKeyStatus(k, usage) {
+  if (!k.isActive) return { id: "inactive", label: "Đã tắt", palette: "bg-text-muted/15 text-text-muted" };
+  if (k.expiresAt) {
+    const t = new Date(k.expiresAt).getTime();
+    if (t <= Date.now()) return { id: "expired", label: "Hết hạn", palette: "bg-red-500/15 text-red-500" };
+    if (t - Date.now() <= 7 * 86400000) return { id: "expiringSoon", label: "Sắp hết hạn", palette: "bg-amber-500/15 text-amber-600 dark:text-amber-400" };
+  }
+  if (usage) {
+    const max = Math.max(usage.daily?.pct ?? 0, usage.monthly?.pct ?? 0, usage.lifetime?.pct ?? 0);
+    if (max >= 95) return { id: "critical", label: "Đầy limit", palette: "bg-red-500/15 text-red-500" };
+    if (max >= 80) return { id: "nearLimit", label: "Gần limit", palette: "bg-amber-500/15 text-amber-600 dark:text-amber-400" };
+  }
+  return { id: "active", label: "Đang dùng", palette: "bg-emerald-500/15 text-emerald-500" };
+}
+
+function KeysTab({ keys, keyLimitsUsage, selected, onToggleSelect, onToggleSelectAll, onClearSelection, onBulk, onBulkToggleActive, onToggle, onEdit }) {
+  const [filter, setFilter] = useState("all");
+  const [search, setSearch] = useState("");
+
+  const usageById = new Map((keyLimitsUsage || []).map((u) => [u.keyId, u]));
+
+  const enriched = keys.map((k) => ({ k, usage: usageById.get(k.id), status: getKeyStatus(k, usageById.get(k.id)) }));
+
+  const counts = enriched.reduce((acc, { status }) => {
+    acc.all += 1;
+    acc[status.id] = (acc[status.id] || 0) + 1;
+    if (status.id === "critical") acc.nearLimit = (acc.nearLimit || 0) + 1;
+    return acc;
+  }, { all: 0 });
+
+  const filtered = enriched.filter(({ k, status }) => {
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      const hay = `${k.name || ""} ${k.keyDisplay || ""}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    if (filter === "all") return true;
+    if (filter === "nearLimit") return status.id === "nearLimit" || status.id === "critical";
+    return status.id === filter;
+  });
+
+  const visibleKeys = filtered.map(({ k }) => k);
+  const allSelected = visibleKeys.length > 0 && visibleKeys.every((k) => selected.has(k.id));
+
   return (
-    <Card>
-      <h2 className="font-semibold mb-3">API Keys ({keys.length})</h2>
-      {keys.length === 0 ? <p className="text-sm text-text-muted">Khách chưa có key nào.</p> : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-surface-2 text-xs uppercase text-text-muted">
-              <tr>
-                <th className="px-3 py-2 text-left">Tên</th>
-                <th className="px-3 py-2 text-left">Display</th>
-                <th className="px-3 py-2 text-right">Daily</th>
-                <th className="px-3 py-2 text-right">Monthly</th>
-                <th className="px-3 py-2 text-right">Lifetime</th>
-                <th className="px-3 py-2 text-left">Hết hạn</th>
-                <th className="px-3 py-2 text-center">RTK</th>
-                <th className="px-3 py-2 text-center">Caveman</th>
-                <th className="px-3 py-2 text-center">Active</th>
-                <th className="px-3 py-2"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {keys.map((k) => (
-                <tr key={k.id} className="border-t border-border-subtle">
-                  <td className="px-3 py-2">{k.name}</td>
-                  <td className="px-3 py-2 font-mono text-xs">{k.keyDisplay}</td>
-                  <td className="px-3 py-2 text-right text-xs">{k.dailyTokenLimit ? fmtNum(k.dailyTokenLimit) : "∞"}</td>
-                  <td className="px-3 py-2 text-right text-xs">{k.monthlyTokenLimit ? fmtNum(k.monthlyTokenLimit) : "∞"}</td>
-                  <td className="px-3 py-2 text-right text-xs">{k.lifetimeTokenLimit ? fmtNum(k.lifetimeTokenLimit) : "∞"}</td>
-                  <td className="px-3 py-2 text-xs text-text-muted">{fmtTime(k.expiresAt)}</td>
-                  <td className="px-3 py-2 text-center"><CompressBadge value={k.rtkMode} kind="rtk" /></td>
-                  <td className="px-3 py-2 text-center"><CompressBadge value={k.cavemanMode} kind="caveman" /></td>
-                  <td className="px-3 py-2 text-center">
-                    <Toggle checked={k.isActive} onChange={() => onToggle(k.id)} size="sm" />
-                  </td>
-                  <td className="px-3 py-2 text-right whitespace-nowrap">
-                    <Button onClick={() => onOpenCompress(k)} size="sm" variant="ghost">Compress</Button>
-                    <Button onClick={() => onOpenQuota(k)} size="sm" variant="ghost">Quota / gia hạn</Button>
-                    <Button onClick={() => onOpenProvider(k)} size="sm" variant="ghost">Provider</Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+    <div className="flex flex-col gap-3">
+      {/* Stats strip */}
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+        <KeyStatChip label="Tổng" value={counts.all || 0} active={filter === "all"} onClick={() => setFilter("all")} />
+        <KeyStatChip label="Đang dùng" value={counts.active || 0} tone="emerald" active={filter === "active"} onClick={() => setFilter("active")} />
+        <KeyStatChip label="Đã tắt" value={counts.inactive || 0} tone="muted" active={filter === "inactive"} onClick={() => setFilter("inactive")} />
+        <KeyStatChip label="Hết hạn / Sắp" value={(counts.expired || 0) + (counts.expiringSoon || 0)} tone="amber" active={filter === "expiringSoon" || filter === "expired"} onClick={() => setFilter(counts.expired ? "expired" : "expiringSoon")} />
+        <KeyStatChip label="Gần limit" value={counts.nearLimit || 0} tone="amber" active={filter === "nearLimit"} onClick={() => setFilter("nearLimit")} />
+      </div>
+
+      {/* Filter + search */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap gap-1">
+          {KEY_FILTERS.map((f) => (
+            <button
+              key={f.id}
+              onClick={() => setFilter(f.id)}
+              className={`px-2.5 py-1 rounded-full text-xs font-medium border transition ${
+                filter === f.id
+                  ? "bg-primary text-white border-primary"
+                  : "border-border text-text-muted hover:bg-surface-2"
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+        <div className="ml-auto min-w-[200px]">
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Tìm theo tên hoặc prefix..."
+          />
+        </div>
+      </div>
+
+      {/* Bulk toolbar */}
+      {selected.size > 0 && (
+        <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 shadow-sm">
+          <span className="text-sm font-medium">{selected.size} key được chọn</span>
+          <div className="ml-auto flex flex-wrap gap-2">
+            <Button size="sm" variant="ghost" onClick={() => onBulkToggleActive(true)}>Bật</Button>
+            <Button size="sm" variant="ghost" onClick={() => onBulkToggleActive(false)}>Tắt</Button>
+            <Button size="sm" variant="ghost" onClick={() => onBulk("compress")}>Compress</Button>
+            <Button size="sm" variant="ghost" onClick={() => onBulk("quota")}>Quota</Button>
+            <Button size="sm" variant="ghost" onClick={() => onBulk("expiry")}>Hạn dùng</Button>
+            <Button size="sm" variant="ghost" onClick={() => onBulk("rateLimit")}>Rate limit</Button>
+            <Button size="sm" variant="ghost" onClick={() => onBulk("models")}>Models</Button>
+            <Button size="sm" variant="ghost" onClick={() => onBulk("providerAccess")}>Provider</Button>
+            <Button size="sm" variant="ghost" onClick={onClearSelection}>Bỏ chọn</Button>
+          </div>
         </div>
       )}
-    </Card>
+
+      <Card>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-semibold">API Keys ({filtered.length}/{keys.length})</h2>
+          {filtered.length > 0 && (
+            <label className="flex items-center gap-2 text-xs text-text-muted cursor-pointer">
+              <input type="checkbox" checked={allSelected} onChange={() => onToggleSelectAll(visibleKeys)} />
+              <span>Chọn tất cả trên trang</span>
+            </label>
+          )}
+        </div>
+
+        {filtered.length === 0 ? (
+          <p className="text-sm text-text-muted py-8 text-center">{keys.length === 0 ? "Khách chưa có key nào." : "Không có key phù hợp."}</p>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {filtered.map(({ k, usage, status }) => (
+              <KeyRow
+                key={k.id}
+                k={k}
+                usage={usage}
+                status={status}
+                selected={selected.has(k.id)}
+                onToggleSelect={() => onToggleSelect(k.id)}
+                onToggleActive={() => onToggle(k.id)}
+                onEdit={(initialTab) => onEdit(k, initialTab)}
+              />
+            ))}
+          </div>
+        )}
+      </Card>
+    </div>
   );
+}
+
+function KeyStatChip({ label, value, tone = "primary", active, onClick }) {
+  const palette = active
+    ? "bg-primary text-white border-primary"
+    : tone === "emerald" ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10"
+    : tone === "amber" ? "border-amber-500/30 bg-amber-500/5 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
+    : tone === "muted" ? "border-border bg-surface-2 text-text-muted hover:bg-surface"
+    : "border-border bg-surface-2 text-text-main hover:bg-surface";
+  return (
+    <button onClick={onClick} className={`text-left rounded-lg border px-3 py-2 transition ${palette}`}>
+      <div className="text-[10px] uppercase tracking-wide opacity-80">{label}</div>
+      <div className="text-lg font-semibold">{value}</div>
+    </button>
+  );
+}
+
+function KeyRow({ k, usage, status, selected, onToggleSelect, onToggleActive, onEdit }) {
+  const allowedModels = Array.isArray(k.allowedModels) ? k.allowedModels : [];
+  const providerCount = (k.allowedProviders?.length || 0) + (k.allowedConnectionIds?.length || 0);
+  return (
+    <div className={`rounded-lg border ${selected ? "border-primary/40 bg-primary/5" : "border-border-subtle"} p-3`}>
+      <div className="flex items-start gap-3">
+        <input type="checkbox" checked={selected} onChange={onToggleSelect} className="mt-1" />
+        <div className="flex-1 min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-medium">{k.name || "Untitled"}</span>
+            <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] uppercase ${status.palette}`}>{status.label}</span>
+            <code className="text-xs font-mono text-text-muted">{k.keyDisplay}</code>
+          </div>
+
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-text-muted">
+            <span>Hết hạn: {fmtTime(k.expiresAt)}</span>
+            <span>RPM: {k.requestsPerMinute || "∞"}</span>
+            <span>Max/req: {k.maxTokensPerRequest ? fmtNum(k.maxTokensPerRequest) : "∞"}</span>
+            <span>Provider: {providerCount === 0 ? "Tất cả" : `${providerCount} đã chọn`}</span>
+            <span>Models: {allowedModels.length === 0 ? "Tất cả" : `${allowedModels.length} đã chọn`}</span>
+            <span>RTK: <CompressBadge value={k.rtkMode} kind="rtk" /></span>
+            <span>Caveman: <CompressBadge value={k.cavemanMode} kind="caveman" /></span>
+          </div>
+
+          {/* Usage bars */}
+          <div className="mt-2 grid gap-1.5 sm:grid-cols-3">
+            <UsageMicroBar label="Daily" used={usage?.daily?.used} limit={usage?.daily?.limit} pct={usage?.daily?.pct} onClick={() => onEdit("limits")} />
+            <UsageMicroBar label="Monthly" used={usage?.monthly?.used} limit={usage?.monthly?.limit} pct={usage?.monthly?.pct} onClick={() => onEdit("limits")} />
+            <UsageMicroBar label="Lifetime" used={usage?.lifetime?.used} limit={usage?.lifetime?.limit} pct={usage?.lifetime?.pct} onClick={() => onEdit("limits")} />
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          <Toggle checked={k.isActive} onChange={onToggleActive} size="sm" title={k.isActive ? "Tắt key" : "Bật key"} />
+          <Button size="sm" variant="ghost" onClick={() => onEdit("limits")}>Sửa</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UsageMicroBar({ label, used, limit, pct, onClick }) {
+  const has = limit > 0;
+  const p = has ? Math.min(100, pct || 0) : 0;
+  const color = !has ? "bg-text-muted/30" : p >= 90 ? "bg-red-500" : p >= 70 ? "bg-amber-500" : "bg-primary";
+  return (
+    <button onClick={onClick} className="text-left w-full">
+      <div className="flex items-center justify-between text-[11px] mb-0.5">
+        <span className="text-text-muted">{label}</span>
+        <span className="font-mono text-text-muted">
+          {fmtNum(used || 0)} {has ? `/ ${fmtNum(limit)} (${p}%)` : "/ ∞"}
+        </span>
+      </div>
+      <div className="h-1.5 rounded bg-surface-2">
+        <div className={`h-full rounded ${color}`} style={{ width: `${p}%` }} />
+      </div>
+    </button>
+  );
+}
+
+function ProviderScopeBadge({ providers, connections }) {
+  const p = Array.isArray(providers) ? providers : [];
+  const c = Array.isArray(connections) ? connections : [];
+  if (p.length === 0 && c.length === 0) {
+    return <span className="inline-block rounded-full px-2 py-0.5 text-[10px] uppercase bg-text-muted/15 text-text-muted">Tất cả</span>;
+  }
+  const parts = [];
+  if (p.length > 0) parts.push(`${p.length} prov`);
+  if (c.length > 0) parts.push(`${c.length} conn`);
+  return <span className="inline-block rounded-full px-2 py-0.5 text-[10px] uppercase bg-primary/15 text-primary">{parts.join(" · ")}</span>;
 }
 
 function CompressBadge({ value, kind }) {
@@ -743,55 +960,271 @@ function ActionsTab({ onResetPassword }) {
   );
 }
 
-function QuotaModal({ modal, onClose, onSave }) {
-  const [form, setForm] = useState({ mode: "add", dailyTokenLimit: 0, monthlyTokenLimit: 0, lifetimeTokenLimit: 0, extendDays: 0 });
+function EditKeyModal({ modal, customerId, onClose, onSaved, onError }) {
+  const [tab, setTab] = useState("limits");
+  const [form, setForm] = useState(null);
+  const [providerOptions, setProviderOptions] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [extendDays, setExtendDays] = useState(0);
 
   useEffect(() => {
-    if (modal) {
-      setForm({ mode: "add", dailyTokenLimit: 0, monthlyTokenLimit: 0, lifetimeTokenLimit: 0, extendDays: 0 });
+    if (!modal?.key) return;
+    setTab(modal.tab || "limits");
+    const k = modal.key;
+    setForm({
+      name: k.name || "",
+      isActive: !!k.isActive,
+      dailyTokenLimit: k.dailyTokenLimit || 0,
+      monthlyTokenLimit: k.monthlyTokenLimit || 0,
+      lifetimeTokenLimit: k.lifetimeTokenLimit || 0,
+      requestsPerMinute: k.requestsPerMinute || 0,
+      maxTokensPerRequest: k.maxTokensPerRequest || 0,
+      expiresAt: k.expiresAt ? k.expiresAt.slice(0, 16) : "",
+      allowedModelsText: (k.allowedModels || []).join("\n"),
+      allowedProviders: k.allowedProviders || [],
+      allowedConnectionIds: k.allowedConnectionIds || [],
+      rtkMode: k.rtkMode || "inherit",
+      cavemanMode: k.cavemanMode || "inherit",
+    });
+    setExtendDays(0);
+    if (!providerOptions) {
+      fetch("/api/admin/provider-options", { cache: "no-store" })
+        .then((r) => r.json())
+        .then(setProviderOptions)
+        .catch(() => setProviderOptions({ providers: [], connections: [] }));
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modal]);
 
-  if (!modal) return null;
+  if (!modal?.key || !form) return null;
   const k = modal.key;
 
-  function submit() {
-    const payload = { mode: form.mode };
-    if (Number(form.dailyTokenLimit) > 0) payload.dailyTokenLimit = Number(form.dailyTokenLimit);
-    if (Number(form.monthlyTokenLimit) > 0) payload.monthlyTokenLimit = Number(form.monthlyTokenLimit);
-    if (Number(form.lifetimeTokenLimit) > 0) payload.lifetimeTokenLimit = Number(form.lifetimeTokenLimit);
-    if (Number(form.extendDays) > 0) payload.extendDays = Number(form.extendDays);
-    if (Object.keys(payload).length === 1) return; // chỉ có mode → không có thay đổi
-    onSave(payload);
+  async function save(patch, successMsg) {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/admin/api-keys/${k.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { onError?.(d?.error || "Lỗi cập nhật"); return false; }
+      onSaved?.(successMsg || "Đã cập nhật.");
+      return true;
+    } finally {
+      setBusy(false);
+    }
   }
 
+  async function saveLimits() {
+    const allowedModels = form.allowedModelsText
+      .split(/[\n,]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    let expiresAt = form.expiresAt ? new Date(form.expiresAt).toISOString() : null;
+    if (Number(extendDays) > 0) {
+      const days = Math.floor(Number(extendDays));
+      const base = k.expiresAt ? new Date(k.expiresAt) : new Date();
+      expiresAt = new Date(base.getTime() + days * 86400000).toISOString();
+    }
+    await save({
+      name: form.name.trim() || k.name,
+      dailyTokenLimit: Number(form.dailyTokenLimit) || 0,
+      monthlyTokenLimit: Number(form.monthlyTokenLimit) || 0,
+      lifetimeTokenLimit: Number(form.lifetimeTokenLimit) || 0,
+      requestsPerMinute: Number(form.requestsPerMinute) || 0,
+      maxTokensPerRequest: Number(form.maxTokensPerRequest) || 0,
+      expiresAt,
+      allowedModels,
+    }, "Đã lưu limits.");
+  }
+
+  async function saveProvider() {
+    await save({
+      allowedProviders: form.allowedProviders,
+      allowedConnectionIds: form.allowedConnectionIds,
+    }, "Đã lưu provider access.");
+  }
+
+  async function saveCompress() {
+    await save({
+      rtkMode: form.rtkMode,
+      cavemanMode: form.cavemanMode,
+    }, "Đã lưu compress.");
+  }
+
+  async function quickAddQuota() {
+    // Cộng quota nhanh: dùng route quota của customer (mode=add)
+    const payload = { mode: "add" };
+    const dt = Number(form.dailyTokenLimit) - Number(k.dailyTokenLimit || 0);
+    const mt = Number(form.monthlyTokenLimit) - Number(k.monthlyTokenLimit || 0);
+    const lt = Number(form.lifetimeTokenLimit) - Number(k.lifetimeTokenLimit || 0);
+    if (dt > 0) payload.dailyTokenLimit = dt;
+    if (mt > 0) payload.monthlyTokenLimit = mt;
+    if (lt > 0) payload.lifetimeTokenLimit = lt;
+    if (Object.keys(payload).length === 1) {
+      onError?.("Tăng giá trị limit so với hiện tại trước khi cộng thêm.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/admin/customers/${customerId}/api-keys/${k.id}/quota`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { onError?.(d?.error || "Lỗi cộng quota"); return; }
+      onSaved?.("Đã cộng thêm quota.");
+    } finally { setBusy(false); }
+  }
+
+  function toggleProvider(id) {
+    setForm((prev) => ({
+      ...prev,
+      allowedProviders: prev.allowedProviders.includes(id)
+        ? prev.allowedProviders.filter((p) => p !== id)
+        : [...prev.allowedProviders, id],
+    }));
+  }
+  function toggleConnection(id) {
+    setForm((prev) => ({
+      ...prev,
+      allowedConnectionIds: prev.allowedConnectionIds.includes(id)
+        ? prev.allowedConnectionIds.filter((c) => c !== id)
+        : [...prev.allowedConnectionIds, id],
+    }));
+  }
+
+  const TABS_EDIT = [
+    { id: "limits", label: "Limits & Hạn dùng" },
+    { id: "provider", label: "Models & Provider" },
+    { id: "compress", label: "Compress" },
+  ];
+
   return (
-    <Modal isOpen={!!modal} onClose={onClose} title={`Cập nhật quota: ${k.name}`}>
-      <div className="flex flex-col gap-4">
-        <div className="rounded-md bg-surface-2 p-3 text-xs text-text-muted">
-          <div>Hiện tại: daily {fmtNum(k.dailyTokenLimit) || "∞"} · monthly {fmtNum(k.monthlyTokenLimit) || "∞"} · lifetime {fmtNum(k.lifetimeTokenLimit) || "∞"}</div>
-          <div>Hết hạn: {fmtTime(k.expiresAt)}</div>
+    <Modal isOpen={!!modal?.key} onClose={onClose} title={`Sửa key: ${k.name || k.keyDisplay}`}>
+      <div className="flex flex-col gap-4 max-h-[75vh]">
+        <div className="rounded-md bg-surface-2 p-2 text-xs text-text-muted flex flex-wrap gap-x-3 gap-y-1">
+          <span>{k.keyDisplay}</span>
+          <span>Hết hạn: {fmtTime(k.expiresAt)}</span>
+          <span>{k.isActive ? "Đang dùng" : "Đã tắt"}</span>
         </div>
 
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-text-muted">Chế độ</span>
-          <select value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value })} className="rounded-lg border border-border bg-bg px-3 py-2">
-            <option value="add">Cộng thêm vào limit hiện tại</option>
-            <option value="set">Ghi đè limit hiện tại</option>
-          </select>
-        </label>
-
-        <div className="grid grid-cols-3 gap-3">
-          <Input label="Daily" type="number" min={0} value={form.dailyTokenLimit} onChange={(e) => setForm({ ...form, dailyTokenLimit: e.target.value })} />
-          <Input label="Monthly" type="number" min={0} value={form.monthlyTokenLimit} onChange={(e) => setForm({ ...form, monthlyTokenLimit: e.target.value })} />
-          <Input label="Lifetime" type="number" min={0} value={form.lifetimeTokenLimit} onChange={(e) => setForm({ ...form, lifetimeTokenLimit: e.target.value })} />
+        <div className="flex gap-1 border-b border-border-subtle -mb-2">
+          {TABS_EDIT.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className={`-mb-px px-3 py-1.5 text-sm font-medium border-b-2 transition ${
+                tab === t.id ? "border-primary text-primary" : "border-transparent text-text-muted hover:text-text-main"
+              }`}
+            >{t.label}</button>
+          ))}
         </div>
 
-        <Input label="Gia hạn thêm (ngày)" type="number" min={0} value={form.extendDays} onChange={(e) => setForm({ ...form, extendDays: e.target.value })} hint="Cộng thêm N ngày vào hạn dùng. Để 0 nếu không gia hạn." />
+        <div className="overflow-y-auto pr-1">
+          {tab === "limits" && (
+            <div className="flex flex-col gap-3">
+              <Input label="Tên key" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
 
-        <div className="flex gap-2">
-          <Button onClick={submit} fullWidth>Áp dụng</Button>
-          <Button onClick={onClose} variant="ghost" fullWidth>Hủy</Button>
+              <div className="grid grid-cols-3 gap-3">
+                <Input label="Daily token limit" type="number" min={0} value={form.dailyTokenLimit} onChange={(e) => setForm({ ...form, dailyTokenLimit: e.target.value })} hint="0 = ∞" />
+                <Input label="Monthly token limit" type="number" min={0} value={form.monthlyTokenLimit} onChange={(e) => setForm({ ...form, monthlyTokenLimit: e.target.value })} hint="0 = ∞" />
+                <Input label="Lifetime token limit" type="number" min={0} value={form.lifetimeTokenLimit} onChange={(e) => setForm({ ...form, lifetimeTokenLimit: e.target.value })} hint="0 = ∞" />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <Input label="Requests / phút" type="number" min={0} value={form.requestsPerMinute} onChange={(e) => setForm({ ...form, requestsPerMinute: e.target.value })} hint="0 = ∞" />
+                <Input label="Max tokens / request" type="number" min={0} value={form.maxTokensPerRequest} onChange={(e) => setForm({ ...form, maxTokensPerRequest: e.target.value })} hint="0 = ∞" />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 items-end">
+                <Input label="Hết hạn (set tường minh)" type="datetime-local" value={form.expiresAt} onChange={(e) => setForm({ ...form, expiresAt: e.target.value })} hint="Để trống = không bao giờ hết" />
+                <Input label="Hoặc gia hạn thêm N ngày" type="number" min={0} value={extendDays} onChange={(e) => setExtendDays(e.target.value)} hint="Cộng dồn vào hạn hiện tại khi lưu" />
+              </div>
+
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="text-text-muted">Allowed models</span>
+                <textarea
+                  value={form.allowedModelsText}
+                  onChange={(e) => setForm({ ...form, allowedModelsText: e.target.value })}
+                  rows={3}
+                  placeholder="claude-sonnet-4&#10;gpt-4o"
+                  className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm font-mono"
+                />
+                <span className="text-xs text-text-muted">Mỗi model 1 dòng (hoặc cách bằng dấu phẩy). Để trống = tất cả.</span>
+              </label>
+
+              <div className="flex gap-2 pt-2 border-t border-border-subtle">
+                <Button onClick={saveLimits} disabled={busy} fullWidth>Lưu</Button>
+                <Button onClick={quickAddQuota} disabled={busy} variant="ghost" fullWidth title="Dùng diff so với limit cũ để cộng thêm thay vì set">Cộng thêm quota</Button>
+              </div>
+            </div>
+          )}
+
+          {tab === "provider" && (
+            <div className="flex flex-col gap-3">
+              <p className="text-xs text-text-muted">
+                Để trống cả hai = không giới hạn. Chọn connection sẽ tự suy ra provider.
+              </p>
+              {!providerOptions ? (
+                <div className="h-20 animate-pulse" />
+              ) : (
+                <>
+                  <div>
+                    <span className="text-sm font-medium">Providers ({form.allowedProviders.length}/{providerOptions.providers.length})</span>
+                    <div className="flex flex-wrap gap-2 mt-1">
+                      {providerOptions.providers.map((p) => (
+                        <label key={p.id} className="flex items-center gap-1.5 text-sm cursor-pointer">
+                          <input type="checkbox" checked={form.allowedProviders.includes(p.id)} onChange={() => toggleProvider(p.id)} />
+                          <span>{p.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <span className="text-sm font-medium">Connections ({form.allowedConnectionIds.length}/{providerOptions.connections.length})</span>
+                    <div className="flex flex-col gap-1 mt-1 max-h-48 overflow-y-auto">
+                      {providerOptions.connections.map((c) => (
+                        <label key={c.id} className="flex items-center gap-1.5 text-sm cursor-pointer">
+                          <input type="checkbox" checked={form.allowedConnectionIds.includes(c.id)} onChange={() => toggleConnection(c.id)} />
+                          <span>{c.name}</span>
+                          <span className="text-xs text-text-muted ml-1">({c.providerName})</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+              <div className="flex gap-2 pt-2 border-t border-border-subtle">
+                <Button onClick={saveProvider} disabled={busy} fullWidth>Lưu</Button>
+              </div>
+            </div>
+          )}
+
+          {tab === "compress" && (
+            <div className="flex flex-col gap-3">
+              <p className="text-xs text-text-muted">
+                <strong>Inherit</strong> dùng setting global. <strong>RTK</strong> nén tool_result, <strong>Caveman</strong> chèn system prompt nén theo level.
+              </p>
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="text-text-muted">RTK mode</span>
+                <select value={form.rtkMode} onChange={(e) => setForm({ ...form, rtkMode: e.target.value })} className="rounded-lg border border-border bg-bg px-3 py-2">
+                  {RTK_MODES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="text-text-muted">Caveman mode</span>
+                <select value={form.cavemanMode} onChange={(e) => setForm({ ...form, cavemanMode: e.target.value })} className="rounded-lg border border-border bg-bg px-3 py-2">
+                  {CAVEMAN_MODES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+                </select>
+              </label>
+              <div className="flex gap-2 pt-2 border-t border-border-subtle">
+                <Button onClick={saveCompress} disabled={busy} fullWidth>Lưu</Button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </Modal>
@@ -824,9 +1257,12 @@ function CompressModal({ modal, onClose, onSave }) {
 
   if (!modal) return null;
   const k = modal.key;
+  const title = k
+    ? `Compress: ${k.name || k.keyDisplay}`
+    : `Compress (${modal.bulkCount || 0} key)`;
 
   return (
-    <Modal isOpen={!!modal} onClose={onClose} title={`Compress: ${k.name || k.keyDisplay}`}>
+    <Modal isOpen={!!modal} onClose={onClose} title={title}>
       <div className="flex flex-col gap-4">
         <p className="text-xs text-text-muted">
           <strong>Inherit</strong>: dùng setting global. <strong>RTK</strong> nén tool_result, <strong>Caveman</strong> chèn system prompt nén theo level.
@@ -855,10 +1291,211 @@ function CompressModal({ modal, onClose, onSave }) {
   );
 }
 
+function BulkQuotaModal({ modal, onClose, onSave }) {
+  const [form, setForm] = useState({ mode: "add", dailyTokenLimit: 0, monthlyTokenLimit: 0, lifetimeTokenLimit: 0 });
+
+  useEffect(() => {
+    if (modal) setForm({ mode: "add", dailyTokenLimit: 0, monthlyTokenLimit: 0, lifetimeTokenLimit: 0 });
+  }, [modal]);
+
+  if (!modal) return null;
+
+  return (
+    <Modal isOpen={!!modal} onClose={onClose} title={`Quota (${modal.bulkCount || 0} key)`}>
+      <div className="flex flex-col gap-4">
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-text-muted">Chế độ</span>
+          <select value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value })} className="rounded-lg border border-border bg-bg px-3 py-2">
+            <option value="add">Cộng thêm vào limit hiện tại</option>
+            <option value="set">Ghi đè limit hiện tại</option>
+          </select>
+        </label>
+
+        <div className="grid grid-cols-3 gap-3">
+          <Input label="Daily" type="number" min={0} value={form.dailyTokenLimit} onChange={(e) => setForm({ ...form, dailyTokenLimit: e.target.value })} />
+          <Input label="Monthly" type="number" min={0} value={form.monthlyTokenLimit} onChange={(e) => setForm({ ...form, monthlyTokenLimit: e.target.value })} />
+          <Input label="Lifetime" type="number" min={0} value={form.lifetimeTokenLimit} onChange={(e) => setForm({ ...form, lifetimeTokenLimit: e.target.value })} />
+        </div>
+
+        <div className="flex gap-2">
+          <Button onClick={() => onSave(form)} fullWidth>Áp dụng</Button>
+          <Button onClick={onClose} variant="ghost" fullWidth>Hủy</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function ExpiryModal({ modal, onClose, onSave }) {
+  const [mode, setMode] = useState("extend");
+  const [extendDays, setExtendDays] = useState(0);
+  const [expiresAt, setExpiresAt] = useState("");
+
+  useEffect(() => {
+    if (!modal) return;
+    setMode("extend");
+    setExtendDays(0);
+    setExpiresAt("");
+  }, [modal]);
+
+  if (!modal) return null;
+  const k = modal.key;
+  const title = k
+    ? `Hạn dùng: ${k.name || k.keyDisplay}`
+    : `Hạn dùng (${modal.bulkCount || 0} key)`;
+
+  function submit() {
+    if (mode === "extend") {
+      const n = Number(extendDays);
+      if (!n || n <= 0) return;
+      onSave({ extendDays: n });
+    } else if (mode === "set") {
+      onSave({ expiresAt: expiresAt || null });
+    } else {
+      onSave({ expiresAt: null });
+    }
+  }
+
+  return (
+    <Modal isOpen={!!modal} onClose={onClose} title={title}>
+      <div className="flex flex-col gap-4">
+        {k && (
+          <div className="rounded-md bg-surface-2 p-3 text-xs text-text-muted">
+            Hết hạn hiện tại: {fmtTime(k.expiresAt)}
+          </div>
+        )}
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-text-muted">Chế độ</span>
+          <select value={mode} onChange={(e) => setMode(e.target.value)} className="rounded-lg border border-border bg-bg px-3 py-2">
+            <option value="extend">Gia hạn thêm N ngày</option>
+            <option value="set">Set hạn dùng tường minh</option>
+            <option value="clear">Bỏ hạn (không bao giờ hết)</option>
+          </select>
+        </label>
+
+        {mode === "extend" && (
+          <Input label="Số ngày" type="number" min={1} value={extendDays} onChange={(e) => setExtendDays(e.target.value)} hint="Cộng vào hạn hiện tại của mỗi key (hoặc tính từ hôm nay nếu key chưa có hạn)." />
+        )}
+        {mode === "set" && (
+          <Input label="ExpiresAt" type="datetime-local" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} />
+        )}
+
+        <div className="flex gap-2">
+          <Button onClick={submit} fullWidth>Áp dụng</Button>
+          <Button onClick={onClose} variant="ghost" fullWidth>Hủy</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function RateLimitModal({ modal, onClose, onSave }) {
+  const [requestsPerMinute, setRpm] = useState(0);
+  const [maxTokensPerRequest, setMaxTok] = useState(0);
+
+  useEffect(() => {
+    if (!modal) return;
+    if (modal.key) {
+      setRpm(modal.key.requestsPerMinute || 0);
+      setMaxTok(modal.key.maxTokensPerRequest || 0);
+    } else {
+      setRpm(0);
+      setMaxTok(0);
+    }
+  }, [modal]);
+
+  if (!modal) return null;
+  const k = modal.key;
+  const title = k
+    ? `Rate limit: ${k.name || k.keyDisplay}`
+    : `Rate limit (${modal.bulkCount || 0} key)`;
+
+  function submit() {
+    const out = {};
+    if (requestsPerMinute !== "" && Number(requestsPerMinute) >= 0) out.requestsPerMinute = Number(requestsPerMinute);
+    if (maxTokensPerRequest !== "" && Number(maxTokensPerRequest) >= 0) out.maxTokensPerRequest = Number(maxTokensPerRequest);
+    if (Object.keys(out).length === 0) return;
+    onSave(out);
+  }
+
+  return (
+    <Modal isOpen={!!modal} onClose={onClose} title={title}>
+      <div className="flex flex-col gap-4">
+        <p className="text-xs text-text-muted">Đặt 0 để không giới hạn.</p>
+        <Input label="Requests / phút" type="number" min={0} value={requestsPerMinute} onChange={(e) => setRpm(e.target.value)} />
+        <Input label="Max tokens / request" type="number" min={0} value={maxTokensPerRequest} onChange={(e) => setMaxTok(e.target.value)} />
+        <div className="flex gap-2">
+          <Button onClick={submit} fullWidth>Áp dụng</Button>
+          <Button onClick={onClose} variant="ghost" fullWidth>Hủy</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function ModelsModal({ modal, onClose, onSave }) {
+  const [text, setText] = useState("");
+  const [merge, setMerge] = useState(false);
+
+  useEffect(() => {
+    if (!modal) return;
+    if (modal.key) {
+      setText((modal.key.allowedModels || []).join("\n"));
+      setMerge(false);
+    } else {
+      setText("");
+      setMerge(false);
+    }
+  }, [modal]);
+
+  if (!modal) return null;
+  const k = modal.key;
+  const title = k
+    ? `Allowed models: ${k.name || k.keyDisplay}`
+    : `Allowed models (${modal.bulkCount || 0} key)`;
+
+  function submit() {
+    const list = text
+      .split(/[\n,]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    onSave({ allowedModels: list, merge });
+  }
+
+  return (
+    <Modal isOpen={!!modal} onClose={onClose} title={title}>
+      <div className="flex flex-col gap-4">
+        <p className="text-xs text-text-muted">
+          Mỗi model trên một dòng (hoặc cách nhau bằng dấu phẩy). Để trống danh sách + bỏ chọn merge để cho phép tất cả.
+        </p>
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-text-muted">Models</span>
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={5}
+            className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm font-mono"
+            placeholder="claude-sonnet-4&#10;gpt-4o&#10;cursor/cursor-small"
+          />
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={merge} onChange={(e) => setMerge(e.target.checked)} />
+          <span>Merge với danh sách hiện tại (thay vì ghi đè)</span>
+        </label>
+        <div className="flex gap-2">
+          <Button onClick={submit} fullWidth>Áp dụng</Button>
+          <Button onClick={onClose} variant="ghost" fullWidth>Hủy</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function ProviderAccessModal({ modal, onClose, onSave }) {
   const [options, setOptions] = useState(null);
   const [selectedProviders, setSelectedProviders] = useState([]);
   const [selectedConnections, setSelectedConnections] = useState([]);
+  const [mode, setMode] = useState("set");
 
   useEffect(() => {
     if (!modal) return;
@@ -869,13 +1506,19 @@ function ProviderAccessModal({ modal, onClose, onSave }) {
     if (modal.key) {
       setSelectedProviders(modal.key.allowedProviders || []);
       setSelectedConnections(modal.key.allowedConnectionIds || []);
+      setMode("set");
     } else {
       setSelectedProviders([]);
       setSelectedConnections([]);
+      setMode("set");
     }
   }, [modal]);
 
   if (!modal) return null;
+  const isBulk = !modal.key;
+  const title = isBulk
+    ? `Provider access (${modal.bulkCount || 0} key)`
+    : `Provider access: ${modal.key?.name || modal.key?.keyDisplay || ""}`;
 
   function toggleProvider(id) {
     setSelectedProviders((prev) =>
@@ -898,15 +1541,28 @@ function ProviderAccessModal({ modal, onClose, onSave }) {
   }
 
   function submit() {
-    onSave({ allowedProviders: selectedProviders, allowedConnectionIds: selectedConnections });
+    const payload = isBulk ? { mode } : {};
+    if (selectedProviders.length > 0 || !isBulk) payload.allowedProviders = selectedProviders;
+    if (selectedConnections.length > 0 || !isBulk) payload.allowedConnectionIds = selectedConnections;
+    onSave(payload);
   }
 
   return (
-    <Modal isOpen={!!modal} onClose={onClose} title={`Provider access: ${modal.key?.name || modal.key?.keyDisplay || ""}`}>
+    <Modal isOpen={!!modal} onClose={onClose} title={title}>
       <div className="flex flex-col gap-4 max-h-[70vh] overflow-y-auto">
         <p className="text-xs text-text-muted">
           Để trống cả 2 = không giới hạn. Nếu chọn connection cụ thể, provider sẽ được suy ra tự động.
         </p>
+
+        {isBulk && (
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="text-text-muted">Chế độ</span>
+            <select value={mode} onChange={(e) => setMode(e.target.value)} className="rounded-lg border border-border bg-bg px-3 py-2">
+              <option value="set">Ghi đè</option>
+              <option value="merge">Merge với danh sách hiện tại</option>
+            </select>
+          </label>
+        )}
 
         {!options ? (
           <div className="h-20 animate-pulse" />

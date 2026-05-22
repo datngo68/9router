@@ -66,6 +66,21 @@ export async function handleEmbeddings(request) {
   }
 
   const modelInfo = await getModelInfo(modelStr);
+  if (modelInfo.ambiguous) {
+    const hint = modelInfo.ambiguous.candidates.map((a) => `${a}/${modelStr}`).join(", ");
+    log.warn("EMBEDDINGS", `Ambiguous model id "${modelStr}" — candidates: ${hint}`);
+    return errorResponse(
+      HTTP_STATUS.BAD_REQUEST,
+      `Ambiguous model id "${modelStr}". Please prefix with one of: ${hint}`
+    );
+  }
+  if (modelInfo.unresolved) {
+    log.warn("EMBEDDINGS", `Unresolved model "${modelStr}"`);
+    return errorResponse(
+      HTTP_STATUS.BAD_REQUEST,
+      `Model "${modelStr}" is not available. Add a provider connection that exposes this model, or prefix the id.`
+    );
+  }
   if (!modelInfo.provider) {
     log.warn("EMBEDDINGS", "Invalid model format", { model: modelStr });
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid model format");
