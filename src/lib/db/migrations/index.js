@@ -20,8 +20,12 @@ import m016 from "./016-referrals.js";
 import m017 from "./017-notifications-schedule.js";
 import m018 from "./018-payg-wallet.js";
 import m019 from "./019-api-key-provider-binding.js";
+import m020 from "./020-rate-limit-window.js";
+import m021 from "./021-order-target-api-key.js";
+import m022 from "./022-api-key-quota-reset.js";
+import m023 from "./023-orders-planid-nullable.js";
 
-export const MIGRATIONS = [m001, m002, m003, m004, m005, m006, m007, m008, m009, m010, m011, m012, m013, m014, m015, m016, m017, m018, m019].sort((a, b) => a.version - b.version);
+export const MIGRATIONS = [m001, m002, m003, m004, m005, m006, m007, m008, m009, m010, m011, m012, m013, m014, m015, m016, m017, m018, m019, m020, m021, m022, m023].sort((a, b) => a.version - b.version);
 
 export function latestVersion() {
   return MIGRATIONS.length ? MIGRATIONS[MIGRATIONS.length - 1].version : 0;

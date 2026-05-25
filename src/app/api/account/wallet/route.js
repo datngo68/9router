@@ -38,6 +38,8 @@ export async function GET(request) {
 
   return NextResponse.json({
     walletEnabled: !!settings.walletEnabled,
+    paygSelfServe: settings.walletPaygSelfServeKeys !== false,
+    paygMaxKeysPerCustomer: Number(settings.walletPaygMaxKeysPerCustomer || 5),
     balance: {
       micro: balance?.balance || 0,
       vnd: microToVnd(balance?.balance || 0),

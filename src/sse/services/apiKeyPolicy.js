@@ -58,6 +58,7 @@ function mapRow(row) {
     lifetimeTokenLimit: Number(row.lifetimeTokenLimit || 0),
     requestsPerMinute: Number(row.requestsPerMinute || 0),
     maxTokensPerRequest: Number(row.maxTokensPerRequest || 0),
+    rateLimitWindowSec: Number(row.rateLimitWindowSec || 0),
     expiresAt: row.expiresAt || null,
     allowedModels: parseJson(row.allowedModels, []),
     allowedIps: parseJson(row.allowedIps, []),
@@ -68,6 +69,7 @@ function mapRow(row) {
     allowedConnectionIds: parseJson(row.allowedConnectionIds, []),
     customerId: row.customerId || null,
     orderId: row.orderId || null,
+    quotaResetAt: row.quotaResetAt || null,
     createdAt: row.createdAt,
     walletBalance: Number(row._walletBalance || 0),
     walletMinLimit: Number(row._walletMinLimit || 0),
@@ -145,7 +147,7 @@ export async function checkApiKeyDailyTokenLimit(apiKeyRecord, date = new Date()
   const limit = Number(apiKeyRecord?.dailyTokenLimit || 0);
   if (!Number.isFinite(limit) || limit <= 0) return { allowed: true };
 
-  const usage = await getApiKeyDailyTokenUsage(apiKeyRecord.id, date);
+  const usage = await getApiKeyDailyTokenUsage(apiKeyRecord.id, date, { quotaResetAt: apiKeyRecord.quotaResetAt });
   // Add in-flight reservations so parallel requests don't all see the same
   // pre-write usage and collectively blow past the limit.
   const reserved = getReservedTokens(apiKeyRecord.id);
@@ -213,7 +215,7 @@ export async function checkApiKeyMonthlyTokenLimit(apiKeyRecord, date = new Date
   const limit = Number(apiKeyRecord?.monthlyTokenLimit || 0);
   if (!Number.isFinite(limit) || limit <= 0) return { allowed: true };
 
-  const usage = await getApiKeyMonthlyTokenUsage(apiKeyRecord.id, date);
+  const usage = await getApiKeyMonthlyTokenUsage(apiKeyRecord.id, date, { quotaResetAt: apiKeyRecord.quotaResetAt });
   const reserved = getReservedTokens(apiKeyRecord.id);
   const projected = usage.totalTokens + reserved;
   if (projected < limit) {
@@ -243,7 +245,7 @@ export async function checkApiKeyLifetimeTokenLimit(apiKeyRecord) {
   const limit = Number(apiKeyRecord?.lifetimeTokenLimit || 0);
   if (!Number.isFinite(limit) || limit <= 0) return { allowed: true };
 
-  const usage = await getApiKeyLifetimeTokenUsage(apiKeyRecord.id);
+  const usage = await getApiKeyLifetimeTokenUsage(apiKeyRecord.id, { quotaResetAt: apiKeyRecord.quotaResetAt });
   const reserved = getReservedTokens(apiKeyRecord.id);
   const projected = usage.totalTokens + reserved;
   if (projected < limit) {

@@ -36,6 +36,8 @@ const salesItems = [
   { href: "/dashboard/vouchers", label: "Vouchers", icon: "confirmation_number" },
   { href: "/dashboard/notifications", label: "Notifications", icon: "campaign" },
   { href: "/dashboard/revenue", label: "Revenue", icon: "trending_up" },
+  { href: "/dashboard/wallet", label: "Wallet & PAYG", icon: "account_balance_wallet" },
+  { href: "/dashboard/payg-pricing", label: "PAYG Pricing", icon: "request_quote" },
   { href: "/dashboard/settings/store", label: "Store Settings", icon: "tune" },
 ];
 

@@ -22,6 +22,31 @@ function fmtPrice(v) {
   return `$${Number(v).toFixed(v < 1 ? 3 : 2)}`;
 }
 
+function fmtRateWindow(sec) {
+  const s = Number(sec || 0);
+  if (s <= 0) return "phút";
+  if (s % 3600 === 0) return `${s / 3600}h`;
+  if (s % 60 === 0) return `${s / 60} phút`;
+  return `${s}s`;
+}
+
+function fmtPlanExpiry(plan) {
+  const m = Number(plan?.expiresAfterMinutes || 0);
+  const d = Number(plan?.expiresAfterDays || 0);
+  if (m > 0) {
+    const days = Math.floor(m / 1440);
+    const hours = Math.floor((m % 1440) / 60);
+    const mins = m % 60;
+    const parts = [];
+    if (days) parts.push(`${days} ngày`);
+    if (hours) parts.push(`${hours}h`);
+    if (mins) parts.push(`${mins} phút`);
+    return parts.join(" ") || `${m} phút`;
+  }
+  if (d > 0) return `${d} ngày`;
+  return "Không hết hạn";
+}
+
 export default function PlanDetailPage() {
   const params = useParams();
   const planId = params?.id;
@@ -268,7 +293,7 @@ export default function PlanDetailPage() {
               />
               <Item
                 label="Hết hạn"
-                value={plan.expiresAfterDays > 0 ? `${plan.expiresAfterDays} ngày` : "Không hết hạn"}
+                value={fmtPlanExpiry(plan)}
               />
               {purchaseLimit > 0 && (
                 <Item

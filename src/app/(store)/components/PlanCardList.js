@@ -14,14 +14,40 @@ function formatTokens(n) {
   return String(n);
 }
 
+function formatRateWindow(sec) {
+  const s = Number(sec || 0);
+  if (s <= 0) return "phút";
+  if (s % 3600 === 0) return `${s / 3600}h`;
+  if (s % 60 === 0) return `${s / 60} phút`;
+  return `${s}s`;
+}
+
+function formatPlanExpiry(plan) {
+  const m = Number(plan?.expiresAfterMinutes || 0);
+  const d = Number(plan?.expiresAfterDays || 0);
+  if (m > 0) {
+    const days = Math.floor(m / 1440);
+    const hours = Math.floor((m % 1440) / 60);
+    const mins = m % 60;
+    const parts = [];
+    if (days) parts.push(`${days} ngày`);
+    if (hours) parts.push(`${hours}h`);
+    if (mins) parts.push(`${mins} phút`);
+    return parts.join(" ") || `${m} phút`;
+  }
+  if (d > 0) return `${d} ngày`;
+  return "";
+}
+
 function PlanFeatures({ plan }) {
   const items = [];
   if (plan.dailyTokenLimit > 0) items.push(`${formatTokens(plan.dailyTokenLimit)} tokens/ngày`);
   if (plan.monthlyTokenLimit > 0) items.push(`${formatTokens(plan.monthlyTokenLimit)} tokens/tháng`);
   if (plan.lifetimeTokenLimit > 0) items.push(`Tổng ${formatTokens(plan.lifetimeTokenLimit)} tokens`);
-  if (plan.requestsPerMinute > 0) items.push(`${plan.requestsPerMinute} req/phút`);
+  if (plan.requestsPerMinute > 0) items.push(`${plan.requestsPerMinute} req/${formatRateWindow(plan.rateLimitWindowSec)}`);
   if (plan.maxTokensPerRequest > 0) items.push(`max ${formatTokens(plan.maxTokensPerRequest)} tokens/request`);
-  if (plan.expiresAfterDays > 0) items.push(`Hết hạn sau ${plan.expiresAfterDays} ngày`);
+  const expiryLabel = formatPlanExpiry(plan);
+  if (expiryLabel) items.push(`Hết hạn sau ${expiryLabel}`);
   if (plan.allowedModels?.length > 0) items.push(`${plan.allowedModels.length} model được phép`);
   else items.push("Tất cả model");
 

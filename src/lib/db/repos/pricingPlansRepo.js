@@ -32,7 +32,9 @@ function rowToPlan(row) {
     lifetimeTokenLimit: normalizeNonNegativeInt(row.lifetimeTokenLimit),
     requestsPerMinute: normalizeNonNegativeInt(row.requestsPerMinute),
     maxTokensPerRequest: normalizeNonNegativeInt(row.maxTokensPerRequest),
+    rateLimitWindowSec: normalizeNonNegativeInt(row.rateLimitWindowSec),
     expiresAfterDays: normalizeNonNegativeInt(row.expiresAfterDays),
+    expiresAfterMinutes: normalizeNonNegativeInt(row.expiresAfterMinutes),
     allowedModels: normalizeAllowedModels(row.allowedModels),
     maxPurchasesPerCustomer: normalizeNonNegativeInt(row.maxPurchasesPerCustomer),
     isActive: row.isActive === 1 || row.isActive === true,
@@ -65,8 +67,8 @@ export async function createPricingPlan(input) {
   const id = uuidv4();
   const now = new Date().toISOString();
   db.run(
-    `INSERT INTO pricingPlans(id, kind, name, description, priceVnd, dailyTokenLimit, monthlyTokenLimit, lifetimeTokenLimit, requestsPerMinute, maxTokensPerRequest, expiresAfterDays, allowedModels, maxPurchasesPerCustomer, isActive, sortOrder, createdAt, updatedAt)
-     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO pricingPlans(id, kind, name, description, priceVnd, dailyTokenLimit, monthlyTokenLimit, lifetimeTokenLimit, requestsPerMinute, maxTokensPerRequest, rateLimitWindowSec, expiresAfterDays, expiresAfterMinutes, allowedModels, maxPurchasesPerCustomer, isActive, sortOrder, createdAt, updatedAt)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       input.kind,
@@ -78,7 +80,9 @@ export async function createPricingPlan(input) {
       normalizeNonNegativeInt(input.lifetimeTokenLimit),
       normalizeNonNegativeInt(input.requestsPerMinute),
       normalizeNonNegativeInt(input.maxTokensPerRequest),
+      normalizeNonNegativeInt(input.rateLimitWindowSec),
       normalizeNonNegativeInt(input.expiresAfterDays),
+      normalizeNonNegativeInt(input.expiresAfterMinutes),
       stringifyJson(normalizeAllowedModels(input.allowedModels)),
       normalizeNonNegativeInt(input.maxPurchasesPerCustomer),
       input.isActive === false ? 0 : 1,
@@ -99,7 +103,7 @@ export async function updatePricingPlan(id, patch) {
 
   const now = new Date().toISOString();
   db.run(
-    `UPDATE pricingPlans SET kind = ?, name = ?, description = ?, priceVnd = ?, dailyTokenLimit = ?, monthlyTokenLimit = ?, lifetimeTokenLimit = ?, requestsPerMinute = ?, maxTokensPerRequest = ?, expiresAfterDays = ?, allowedModels = ?, maxPurchasesPerCustomer = ?, isActive = ?, sortOrder = ?, updatedAt = ? WHERE id = ?`,
+    `UPDATE pricingPlans SET kind = ?, name = ?, description = ?, priceVnd = ?, dailyTokenLimit = ?, monthlyTokenLimit = ?, lifetimeTokenLimit = ?, requestsPerMinute = ?, maxTokensPerRequest = ?, rateLimitWindowSec = ?, expiresAfterDays = ?, expiresAfterMinutes = ?, allowedModels = ?, maxPurchasesPerCustomer = ?, isActive = ?, sortOrder = ?, updatedAt = ? WHERE id = ?`,
     [
       merged.kind,
       merged.name,
@@ -110,7 +114,9 @@ export async function updatePricingPlan(id, patch) {
       normalizeNonNegativeInt(merged.lifetimeTokenLimit),
       normalizeNonNegativeInt(merged.requestsPerMinute),
       normalizeNonNegativeInt(merged.maxTokensPerRequest),
+      normalizeNonNegativeInt(merged.rateLimitWindowSec),
       normalizeNonNegativeInt(merged.expiresAfterDays),
+      normalizeNonNegativeInt(merged.expiresAfterMinutes),
       stringifyJson(normalizeAllowedModels(merged.allowedModels)),
       normalizeNonNegativeInt(merged.maxPurchasesPerCustomer),
       merged.isActive === false ? 0 : 1,
@@ -130,18 +136,23 @@ export async function deletePricingPlan(id) {
 
 /**
  * Project a pricingPlan into the policy fields used when creating an apiKey.
+ * Expiry resolution: prefer expiresAfterMinutes (>0) over expiresAfterDays.
  */
 export function planToApiKeyPolicy(plan) {
   if (!plan) return {};
-  const expiresAt = plan.expiresAfterDays > 0
-    ? new Date(Date.now() + plan.expiresAfterDays * 86400000).toISOString()
-    : null;
+  let expiresAt = null;
+  if (plan.expiresAfterMinutes > 0) {
+    expiresAt = new Date(Date.now() + plan.expiresAfterMinutes * 60_000).toISOString();
+  } else if (plan.expiresAfterDays > 0) {
+    expiresAt = new Date(Date.now() + plan.expiresAfterDays * 86400000).toISOString();
+  }
   return {
     dailyTokenLimit: plan.dailyTokenLimit,
     monthlyTokenLimit: plan.monthlyTokenLimit,
     lifetimeTokenLimit: plan.lifetimeTokenLimit,
     requestsPerMinute: plan.requestsPerMinute,
     maxTokensPerRequest: plan.maxTokensPerRequest,
+    rateLimitWindowSec: plan.rateLimitWindowSec,
     expiresAt,
     allowedModels: plan.allowedModels,
   };

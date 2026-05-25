@@ -92,8 +92,18 @@ export default function OrderTrackPage() {
   const id = params?.id;
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
+  const [stashedKey, setStashedKey] = useState(null);
 
   useEffect(() => {
+    // Pull view-once raw key from checkout (wallet purchase fast-path).
+    try {
+      const raw = sessionStorage.getItem(`order:${id}:apiKey`);
+      if (raw) {
+        setStashedKey(JSON.parse(raw));
+        sessionStorage.removeItem(`order:${id}:apiKey`);
+      }
+    } catch {}
+
     let stop = false;
     async function poll() {
       try {
@@ -154,8 +164,25 @@ export default function OrderTrackPage() {
       {status === "delivered" && apiKey && (
         <div className="rounded-xl border border-primary/30 bg-primary/5 p-6">
           <h3 className="font-semibold text-primary">Key đã được giao</h3>
-          <p className="mt-2 text-sm">Key (rút gọn): <code className="font-mono">{apiKey.keyDisplay}</code></p>
-          <p className="mt-1 text-xs text-text-muted">Key đầy đủ đã được gửi qua email của bạn. Có thể quản lý usage trong portal.</p>
+          {stashedKey?.key ? (
+            <>
+              <p className="mt-2 text-sm">Đây là lần duy nhất key đầy đủ hiển thị — hãy lưu lại ngay.</p>
+              <pre className="mt-3 break-all rounded-lg border border-primary/30 bg-bg p-3 font-mono text-sm">{stashedKey.key}</pre>
+              <button
+                onClick={() => navigator.clipboard.writeText(stashedKey.key)}
+                className="mt-3 rounded-lg border border-border px-4 py-2 text-sm hover:bg-surface-2"
+              >
+                Copy key
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="mt-2 text-sm">Key (rút gọn): <code className="font-mono">{apiKey.keyDisplay}</code></p>
+              <p className="mt-1 text-xs text-text-muted">
+                Key đầy đủ đã được gửi qua email của bạn. Có thể quản lý usage trong portal.
+              </p>
+            </>
+          )}
           <Link href="/store/account/keys" className="mt-4 inline-block rounded-lg bg-primary px-4 py-2 text-sm text-white hover:bg-primary/90">
             Mở portal
           </Link>

@@ -1,5 +1,5 @@
 // Latest schema version — bumped when a migration is added in ./migrations/
-export const SCHEMA_VERSION = 15;
+export const SCHEMA_VERSION = 19;
 
 export const PRAGMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -86,6 +86,7 @@ export const TABLES = {
       lifetimeTokenLimit: "INTEGER DEFAULT 0",
       requestsPerMinute: "INTEGER DEFAULT 0",
       maxTokensPerRequest: "INTEGER DEFAULT 0",
+      rateLimitWindowSec: "INTEGER DEFAULT 0",
       expiresAt: "TEXT",
       allowedModels: "TEXT DEFAULT '[]'",
       allowedIps: "TEXT DEFAULT '[]'",
@@ -95,6 +96,7 @@ export const TABLES = {
       allowedConnectionIds: "TEXT DEFAULT '[]'",
       customerId: "TEXT",
       orderId: "TEXT",
+      quotaResetAt: "TEXT",
       createdAt: "TEXT NOT NULL",
     },
     indexes: [
@@ -172,7 +174,9 @@ export const TABLES = {
       lifetimeTokenLimit: "INTEGER DEFAULT 0",
       requestsPerMinute: "INTEGER DEFAULT 0",
       maxTokensPerRequest: "INTEGER DEFAULT 0",
+      rateLimitWindowSec: "INTEGER DEFAULT 0",
       expiresAfterDays: "INTEGER DEFAULT 0",
+      expiresAfterMinutes: "INTEGER DEFAULT 0",
       allowedModels: "TEXT DEFAULT '[]'",
       maxPurchasesPerCustomer: "INTEGER DEFAULT 0",
       isActive: "INTEGER DEFAULT 1",
@@ -189,7 +193,7 @@ export const TABLES = {
     columns: {
       id: "TEXT PRIMARY KEY",
       customerId: "TEXT NOT NULL",
-      planId: "TEXT NOT NULL",
+      planId: "TEXT",
       status: "TEXT NOT NULL DEFAULT 'pending'",
       priceVnd: "INTEGER NOT NULL DEFAULT 0",
       originalPriceVnd: "INTEGER",
@@ -199,6 +203,7 @@ export const TABLES = {
       paymentMethod: "TEXT",
       paymentRef: "TEXT",
       apiKeyId: "TEXT",
+      targetApiKeyId: "TEXT",
       notes: "TEXT",
       createdAt: "TEXT NOT NULL",
       paidAt: "TEXT",

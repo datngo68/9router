@@ -7,6 +7,7 @@ import { handleChatCore } from "./chatCore.js";
 import { convertResponsesApiFormat } from "../translator/helpers/responsesApiHelper.js";
 import { createResponsesApiTransformStream } from "../transformer/responsesTransformer.js";
 import { convertResponsesStreamToJson } from "../transformer/streamToJsonConverter.js";
+import { withSSEHeartbeat } from "../utils/sseHeartbeat.js";
 
 /**
  * Handle /v1/responses request
@@ -85,7 +86,7 @@ export async function handleResponsesCore({ body, modelInfo, credentials, log, o
 
     return {
       success: true,
-      response: new Response(transformedBody, {
+      response: new Response(withSSEHeartbeat(transformedBody), {
         status: 200,
         headers: {
           "Content-Type": "text/event-stream",

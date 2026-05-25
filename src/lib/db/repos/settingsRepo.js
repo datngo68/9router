@@ -86,6 +86,8 @@ const DEFAULT_SETTINGS = {
   walletTopupMinVnd: 10000,
   walletTopupMaxVnd: 10000000,
   walletLowBalanceThresholdVnd: 10000,
+  walletPaygSelfServeKeys: true,
+  walletPaygMaxKeysPerCustomer: 5,
   paygMinChargeVnd: 1,
   paygMarkupMultiplier: 1.5,
   paygFxVndPerUsd: 26000,

@@ -34,7 +34,12 @@ function escapeRegex(s) {
 }
 
 function compilePattern(pattern) {
-  return new RegExp("^" + pattern.split("*").map(escapeRegex).join(".*") + "$");
+  // UX nicety: when admin enters a pattern without any `*`, treat it as a
+  // prefix match (auto-append `*`). Matches user intuition — "pattern:cx/"
+  // should hit every cx/* model, not just literal "cx/". Patterns that do
+  // contain `*` keep their existing glob semantics.
+  const p = pattern.includes("*") ? pattern : `${pattern}*`;
+  return new RegExp("^" + p.split("*").map(escapeRegex).join(".*") + "$");
 }
 
 function normalizePricing(value) {
@@ -100,7 +105,13 @@ export async function getPaygPricingForModel(provider, model) {
     if (!k.startsWith(PATTERN_PREFIX)) continue;
     const pattern = k.slice(PATTERN_PREFIX.length);
     const re = compilePattern(pattern);
-    if (re.test(baseModel) || re.test(model) || (provider && re.test(`${provider}|${model}`))) {
+    // Match candidates the admin most likely had in mind:
+    //   - bare model id (e.g. "gpt-5.4")
+    //   - vendor-prefixed id (e.g. "cx/gpt-5.4")  ← what users see in UI
+    //   - vendor|model legacy form (kept for backwards-compat)
+    const slashed = provider ? `${provider}/${model}` : model;
+    const piped = provider ? `${provider}|${model}` : model;
+    if (re.test(baseModel) || re.test(model) || re.test(slashed) || re.test(piped)) {
       return normalizePricing(v);
     }
   }

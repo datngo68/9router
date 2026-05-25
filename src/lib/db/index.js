@@ -61,7 +61,7 @@ export {
 // Storefront — orders
 export {
   createOrder, createTopupOrder, getOrderById, getOrders,
-  cancelOrder, markOrderRefunded, confirmOrderAtomic,
+  cancelOrder, markOrderRefunded, confirmOrderAtomic, purchasePlanWithWallet,
   attachApibankOrder, findOrderByApibankRef,
   countCustomerPlanPurchases,
 } from "./repos/ordersRepo.js";

@@ -20,6 +20,7 @@ export default function CheckoutPage() {
   const [voucher, setVoucher] = useState(null); // { code, discountVnd, finalPriceVnd }
   const [voucherChecking, setVoucherChecking] = useState(false);
   const [voucherError, setVoucherError] = useState("");
+  const [wallet, setWallet] = useState(null); // { walletEnabled, balanceVnd }
 
   useEffect(() => {
     fetch("/api/account/me", { cache: "no-store" })
@@ -34,6 +35,10 @@ export default function CheckoutPage() {
     fetch("/api/store/plans", { cache: "no-store" })
       .then((r) => r.json())
       .then((d) => setPlan((d.plans || []).find((p) => p.id === planId) || null));
+    fetch("/api/account/wallet?limit=1", { cache: "no-store" })
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => setWallet(d ? { walletEnabled: !!d.walletEnabled, balanceVnd: Number(d.balance?.vnd || 0) } : { walletEnabled: false, balanceVnd: 0 }))
+      .catch(() => setWallet({ walletEnabled: false, balanceVnd: 0 }));
   }, [planId, router]);
 
   async function submit() {
@@ -49,6 +54,16 @@ export default function CheckoutPage() {
       if (!res.ok) {
         setError(data?.error || "Tạo đơn thất bại");
         return;
+      }
+      // Wallet purchase delivered immediately — stash raw key view-once for
+      // the order page to render. Falls through to the same redirect path.
+      if (paymentMethod === "wallet" && data.apiKey?.key) {
+        try {
+          sessionStorage.setItem(
+            `order:${data.order.id}:apiKey`,
+            JSON.stringify({ key: data.apiKey.key, keyDisplay: data.apiKey.keyDisplay }),
+          );
+        } catch {}
       }
       router.push(`/store/order/${data.order.id}`);
     } finally {
@@ -91,6 +106,8 @@ export default function CheckoutPage() {
   const limit = Number(plan.maxPurchasesPerCustomer || 0);
   const used = Number(plan.purchasedCount || 0);
   const limitReached = limit > 0 && used >= limit;
+  const payAmount = voucher ? voucher.finalPriceVnd : plan.priceVnd;
+  const walletCanPay = !!wallet?.walletEnabled && wallet.balanceVnd >= payAmount;
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-6">
@@ -182,6 +199,37 @@ export default function CheckoutPage() {
       <div className="rounded-xl border border-border-subtle bg-surface p-6">
         <h3 className="font-semibold">Phương thức thanh toán</h3>
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          {wallet?.walletEnabled && (
+            <label
+              className={`flex cursor-pointer flex-col gap-1 rounded-lg border px-3 py-2 text-sm sm:col-span-2 ${
+                paymentMethod === "wallet" ? "border-primary bg-primary/5" : "border-border"
+              } ${!walletCanPay ? "opacity-60" : ""}`}
+            >
+              <div className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  checked={paymentMethod === "wallet"}
+                  onChange={() => setPaymentMethod("wallet")}
+                  disabled={!walletCanPay}
+                />
+                <span className="material-symbols-outlined text-base">account_balance_wallet</span>
+                <span className="font-medium">Trả từ ví</span>
+                <span className="ml-auto font-mono text-xs text-text-muted">
+                  Số dư: {fmtVnd(wallet.balanceVnd)}
+                </span>
+              </div>
+              {walletCanPay ? (
+                <p className="text-xs text-text-muted">
+                  Trừ trực tiếp {fmtVnd(payAmount)}, key được phát ngay không cần chờ chuyển khoản.
+                </p>
+              ) : (
+                <p className="text-xs text-amber-600">
+                  Số dư không đủ. Cần thêm {fmtVnd(payAmount - wallet.balanceVnd)} —{" "}
+                  <Link href="/store/account/wallet" className="underline">nạp ví trước</Link>.
+                </p>
+              )}
+            </label>
+          )}
           {[
             { id: "bank", label: "Chuyển khoản ngân hàng" },
             { id: "momo", label: "Ví MoMo" },
@@ -192,7 +240,11 @@ export default function CheckoutPage() {
             </label>
           ))}
         </div>
-        <p className="mt-3 text-xs text-text-muted">Sau khi đặt, hệ thống sẽ hiển thị nội dung chuyển khoản. Admin xác nhận xong sẽ tự động gửi key qua email{me.telegramChatId ? " + Telegram" : ""}.</p>
+        <p className="mt-3 text-xs text-text-muted">
+          {paymentMethod === "wallet"
+            ? "Số dư ví bị trừ ngay, key cấp tự động — không cần chuyển khoản hay đợi xác nhận."
+            : `Sau khi đặt, hệ thống sẽ hiển thị nội dung chuyển khoản. Admin xác nhận xong sẽ tự động gửi key qua email${me.telegramChatId ? " + Telegram" : ""}.`}
+        </p>
       </div>
 
       <div className="rounded-xl border border-border-subtle bg-surface p-6">

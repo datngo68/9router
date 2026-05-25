@@ -9,15 +9,24 @@ export default function AccountOverviewPage() {
   const [keys, setKeys] = useState(null);
   const [usage, setUsage] = useState(null);
   const [orders, setOrders] = useState(null);
+  const [wallet, setWallet] = useState(null);
 
   useEffect(() => {
     fetch("/api/account/keys", { cache: "no-store" }).then((r) => r.json()).then((d) => setKeys(d.keys || []));
     fetch("/api/account/usage?period=7d", { cache: "no-store" }).then((r) => r.json()).then(setUsage);
     fetch("/api/account/orders", { cache: "no-store" }).then((r) => r.json()).then((d) => setOrders(d.orders || []));
+    fetch("/api/account/wallet?limit=1", { cache: "no-store" })
+      .then((r) => r.ok ? r.json() : null)
+      .then(setWallet)
+      .catch(() => setWallet(null));
   }, []);
 
   const activeKeys = (keys || []).filter((k) => k.isActive).length;
   const pendingOrders = (orders || []).filter((o) => o.status === "pending").length;
+  const walletEnabled = !!wallet?.walletEnabled;
+  const balanceVnd = Number(wallet?.balance?.vnd || 0);
+  const lowThreshold = Number(wallet?.lowBalanceThresholdVnd || 0);
+  const isLow = walletEnabled && lowThreshold > 0 && balanceVnd < lowThreshold;
 
   return (
     <div className="flex flex-col gap-6">
@@ -25,6 +34,44 @@ export default function AccountOverviewPage() {
         <h1 className="text-2xl font-semibold">Tổng quan</h1>
         <p className="text-sm text-text-muted">Hoạt động của tài khoản trong 7 ngày qua.</p>
       </div>
+
+      {walletEnabled && (
+        <div className={`rounded-xl border p-5 ${isLow ? "border-amber-500/40 bg-amber-500/5" : "border-primary/30 bg-primary/5"}`}>
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-xs uppercase text-text-muted flex items-center gap-1.5">
+                <span className="material-symbols-outlined text-base">account_balance_wallet</span>
+                Số dư ví
+              </p>
+              <p className="mt-1 text-3xl font-bold">{n(balanceVnd)} <span className="text-base font-medium text-text-muted">₫</span></p>
+              <p className="mt-1 text-xs text-text-muted">
+                {isLow
+                  ? `Sắp hết — ngưỡng cảnh báo ${n(lowThreshold)} ₫. Nạp thêm để tránh gián đoạn.`
+                  : "Dùng để mua gói hoặc trả pay-as-you-go khi quota gói hết."}
+              </p>
+              {wallet?.pendingTopups?.[0] && (
+                <Link href={`/store/order/${wallet.pendingTopups[0].id}`} className="mt-2 inline-block text-xs text-primary hover:underline">
+                  {wallet.pendingTopups.length} đơn nạp đang chờ thanh toán →
+                </Link>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Link
+                href="/store/account/wallet"
+                className={`rounded-lg px-4 py-2 text-sm font-medium ${isLow ? "bg-amber-500 text-white hover:bg-amber-500/90" : "bg-primary text-white hover:bg-primary/90"}`}
+              >
+                Nạp tiền
+              </Link>
+              <Link
+                href="/store/account/wallet"
+                className="rounded-lg border border-border px-4 py-2 text-sm hover:bg-surface-2"
+              >
+                Lịch sử
+              </Link>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Active keys" value={n(activeKeys)} icon="vpn_key" />

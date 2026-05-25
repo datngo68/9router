@@ -150,7 +150,9 @@ export async function POST(request) {
   // ── Confirm order + provision key/wallet ─────────────────────────────
   let result;
   try {
-    const machineId = order.kind === "walletTopup" ? null : await getConsistentMachineId();
+    const machineId = (order.kind === "walletTopup" || order.targetApiKeyId)
+      ? null
+      : await getConsistentMachineId();
     result = await confirmOrderAtomic({
       orderId: order.id,
       paymentRef,

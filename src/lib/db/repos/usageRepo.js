@@ -296,6 +296,42 @@ export async function saveRequestUsage(entry) {
 
     if (!entry.timestamp) entry.timestamp = new Date().toISOString();
 
+    // PAYG auto-detection: when the request carries an apiKeyId but the
+    // caller did not explicitly set `chargeFromWallet`, look the key up.
+    // If it's a PAYG-only key (paygEnabled=1, no quota caps) and a customer
+    // is attached, force-bill from wallet. This catches the upstream-token
+    // tracking path (open-sse logUsage / saveUsageStats) which does not
+    // have the apiKeyRecord context the chat handler has.
+    //
+    // Skipped silently when walletEnabled is off — admin disabling PAYG at
+    // settings time should immediately stop charging the wallet, not stop
+    // metering. The chat handler also gates entry, so this is defence in
+    // depth.
+    if (entry.apiKeyId && entry.chargeFromWallet === undefined) {
+      const keyRow = db.get(
+        `SELECT paygEnabled, customerId, dailyTokenLimit, monthlyTokenLimit, lifetimeTokenLimit
+           FROM apiKeys WHERE id = ?`,
+        [entry.apiKeyId]
+      );
+      if (keyRow?.paygEnabled && keyRow.customerId) {
+        const hasQuota = Number(keyRow.dailyTokenLimit || 0) > 0
+          || Number(keyRow.monthlyTokenLimit || 0) > 0
+          || Number(keyRow.lifetimeTokenLimit || 0) > 0;
+        if (!hasQuota) {
+          try {
+            const { getSettings } = await import("./settingsRepo.js");
+            const settings = await getSettings();
+            if (settings.walletEnabled !== false) {
+              entry.chargeFromWallet = true;
+              if (!entry.customerId) entry.customerId = keyRow.customerId;
+            }
+          } catch (e) {
+            console.error("[usageRepo] payg auto-detect settings load failed:", e?.message || e);
+          }
+        }
+      }
+    }
+
     // Apply admin token multipliers BEFORE cost/PAYG/normalize so everything
     // downstream (cost USD, daily/monthly/lifetime quota, wallet debit) reads
     // the same scaled numbers. Multipliers default to 1.0 → no-op.
@@ -447,38 +483,68 @@ function getNextLocalMidnightIso(date = new Date()) {
   return getLocalDayBounds(date).end.toISOString();
 }
 
-export async function getApiKeyDailyTokenUsage(apiKeyId, date = new Date()) {
+/**
+ * Resolve the lower-bound timestamp to use when summing usage. Defaults to
+ * the start of the period (day/month). When the key has been renewed via
+ * a top-up order, `quotaResetAt` is set to that moment so post-renewal
+ * counters start from there. We take the LATER of (period start, reset)
+ * so the period boundary still applies on subsequent rollovers.
+ */
+function effectiveStart(periodStart, quotaResetAt) {
+  if (!quotaResetAt) return periodStart;
+  const resetMs = new Date(quotaResetAt).getTime();
+  if (!Number.isFinite(resetMs)) return periodStart;
+  return resetMs > periodStart.getTime() ? new Date(resetMs) : periodStart;
+}
+
+async function fetchKeyResetAt(apiKeyId) {
+  if (!apiKeyId) return null;
+  const db = await getAdapter();
+  const row = db.get(`SELECT quotaResetAt FROM apiKeys WHERE id = ?`, [apiKeyId]);
+  return row?.quotaResetAt || null;
+}
+
+export async function getApiKeyDailyTokenUsage(apiKeyId, date = new Date(), { quotaResetAt } = {}) {
   if (!apiKeyId) return { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
   const db = await getAdapter();
   const { start, end } = getLocalDayBounds(date);
+  const resetAt = quotaResetAt !== undefined ? quotaResetAt : await fetchKeyResetAt(apiKeyId);
+  const effStart = effectiveStart(start, resetAt);
   const row = db.get(
     `SELECT COALESCE(SUM(promptTokens), 0) AS promptTokens, COALESCE(SUM(completionTokens), 0) AS completionTokens FROM usageHistory WHERE apiKeyId = ? AND timestamp >= ? AND timestamp < ?`,
-    [apiKeyId, start.toISOString(), end.toISOString()]
+    [apiKeyId, effStart.toISOString(), end.toISOString()]
   );
   const promptTokens = Number(row?.promptTokens || 0);
   const completionTokens = Number(row?.completionTokens || 0);
   return { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens };
 }
 
-export async function getApiKeyMonthlyTokenUsage(apiKeyId, date = new Date()) {
+export async function getApiKeyMonthlyTokenUsage(apiKeyId, date = new Date(), { quotaResetAt } = {}) {
   if (!apiKeyId) return { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
   const db = await getAdapter();
   const { start, end } = getLocalMonthBounds(date);
+  const resetAt = quotaResetAt !== undefined ? quotaResetAt : await fetchKeyResetAt(apiKeyId);
+  const effStart = effectiveStart(start, resetAt);
   const row = db.get(
     `SELECT COALESCE(SUM(promptTokens), 0) AS promptTokens, COALESCE(SUM(completionTokens), 0) AS completionTokens FROM usageHistory WHERE apiKeyId = ? AND timestamp >= ? AND timestamp < ?`,
-    [apiKeyId, start.toISOString(), end.toISOString()]
+    [apiKeyId, effStart.toISOString(), end.toISOString()]
   );
   const promptTokens = Number(row?.promptTokens || 0);
   const completionTokens = Number(row?.completionTokens || 0);
   return { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens };
 }
 
-export async function getApiKeyLifetimeTokenUsage(apiKeyId) {
+export async function getApiKeyLifetimeTokenUsage(apiKeyId, { quotaResetAt } = {}) {
   if (!apiKeyId) return { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
   const db = await getAdapter();
+  const resetAt = quotaResetAt !== undefined ? quotaResetAt : await fetchKeyResetAt(apiKeyId);
+  const where = resetAt
+    ? `WHERE apiKeyId = ? AND timestamp >= ?`
+    : `WHERE apiKeyId = ?`;
+  const params = resetAt ? [apiKeyId, resetAt] : [apiKeyId];
   const row = db.get(
-    `SELECT COALESCE(SUM(promptTokens), 0) AS promptTokens, COALESCE(SUM(completionTokens), 0) AS completionTokens FROM usageHistory WHERE apiKeyId = ?`,
-    [apiKeyId]
+    `SELECT COALESCE(SUM(promptTokens), 0) AS promptTokens, COALESCE(SUM(completionTokens), 0) AS completionTokens FROM usageHistory ${where}`,
+    params
   );
   const promptTokens = Number(row?.promptTokens || 0);
   const completionTokens = Number(row?.completionTokens || 0);
@@ -490,7 +556,8 @@ export async function getApiKeyDailyUsageSummary(apiKeyOrRecord, date = new Date
   // that only have one piece of info handy.
   const apiKeyId = typeof apiKeyOrRecord === "string" ? apiKeyOrRecord : apiKeyOrRecord?.id;
   const dailyTokenLimit = Number(typeof apiKeyOrRecord === "object" ? apiKeyOrRecord?.dailyTokenLimit || 0 : 0);
-  const usage = await getApiKeyDailyTokenUsage(apiKeyId, date);
+  const quotaResetAt = typeof apiKeyOrRecord === "object" ? apiKeyOrRecord?.quotaResetAt : undefined;
+  const usage = await getApiKeyDailyTokenUsage(apiKeyId, date, { quotaResetAt });
   const isUnlimited = !Number.isFinite(dailyTokenLimit) || dailyTokenLimit <= 0;
   const remainingTokens = isUnlimited ? null : Math.max(0, dailyTokenLimit - usage.totalTokens);
   const usagePercent = isUnlimited ? 0 : Math.min(100, Math.round((usage.totalTokens / dailyTokenLimit) * 100));

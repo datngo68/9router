@@ -2,6 +2,7 @@ import { FORMATS } from "../../translator/formats.js";
 import { needsTranslation } from "../../translator/index.js";
 import { createSSETransformStreamWithLogger, createPassthroughStreamWithLogger } from "../../utils/stream.js";
 import { pipeWithDisconnect } from "../../utils/streamHandler.js";
+import { withSSEHeartbeat } from "../../utils/sseHeartbeat.js";
 import { buildRequestDetail, extractRequestConfig } from "./requestDetail.js";
 import { saveRequestDetail } from "@/lib/usageDb.js";
 
@@ -61,7 +62,7 @@ export function handleStreamingResponse({ providerResponse, provider, model, sou
 
   return {
     success: true,
-    response: new Response(transformedBody, { headers: SSE_HEADERS })
+    response: new Response(withSSEHeartbeat(transformedBody), { headers: SSE_HEADERS })
   };
 }
 

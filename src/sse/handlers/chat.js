@@ -159,6 +159,40 @@ export async function handleChat(request, clientRawRequest = null, options = {})
         return errorResponse(HTTP_STATUS.FORBIDDEN, "API key is not allowed from this IP address");
       }
     }
+
+    // PAYG-only detection: key opts in to wallet billing (paygEnabled) AND
+    // has no quota caps configured. Without the gate below, such a key
+    // would slip past the legacy "fallback when quota fails" path entirely
+    // (quota always passes when limits = 0) and serve every request for
+    // free — even after admin disables walletEnabled. Force-charge wallet
+    // upfront and validate prerequisites here.
+    const hasAnyLimitConfigured = (apiKeyRecord?.dailyTokenLimit || 0) > 0
+      || (apiKeyRecord?.monthlyTokenLimit || 0) > 0
+      || (apiKeyRecord?.lifetimeTokenLimit || 0) > 0;
+    const isPaygOnly = !!apiKeyRecord.paygEnabled && !hasAnyLimitConfigured;
+    if (isPaygOnly) {
+      if (!apiKeyRecord.customerId) {
+        log.warn("AUTH", "PAYG denied: key has no customer attached");
+        return errorResponse(HTTP_STATUS.FORBIDDEN, "PAYG key is not bound to a customer account");
+      }
+      if (settings.walletEnabled === false) {
+        log.warn("AUTH", `PAYG denied: walletEnabled=${settings.walletEnabled} (key=${apiKeyRecord.keyDisplay} customer=${apiKeyRecord.customerId})`);
+        return errorResponse(HTTP_STATUS.FORBIDDEN, "Pay-as-you-go is currently disabled");
+      }
+      if (!hasWalletHeadroom(apiKeyRecord)) {
+        log.warn("AUTH", `PAYG denied: wallet balance below floor (balance=${apiKeyRecord.walletBalance} minLimit=${apiKeyRecord.walletMinLimit})`);
+        // Fire low-balance noti so the customer gets nudged once.
+        import("@/lib/notifications/walletEvents.js")
+          .then((m) => m.notifyPaygChargeFailed(
+            { id: apiKeyRecord.customerId },
+            { reason: "Số dư ví không đủ", model: modelStr }
+          ))
+          .catch(() => {});
+        return errorResponse(HTTP_STATUS.PAYMENT_REQUIRED, "Wallet balance is insufficient — please top up to continue");
+      }
+      chargeFromWallet = true;
+    }
+
     // Quota checks. Run all 3 (daily/monthly/lifetime) and remember the
     // first failure. If `paygEnabled` is on AND the wallet has headroom we
     // override the failure and bill from wallet instead.
@@ -206,19 +240,24 @@ export async function handleChat(request, clientRawRequest = null, options = {})
       }
     }
 
-    // Per-key requests-per-minute throttle. Sliding 60s window in RAM.
+    // Per-key requests-per-minute throttle. Sliding window in RAM. Window
+    // size defaults to 60s but can be overridden per key.
     const rateLimit = Number(apiKeyRecord?.requestsPerMinute || 0);
     if (rateLimit > 0) {
-      const consumed = consumeRequest(apiKeyRecord.id, rateLimit);
+      const windowSec = Number(apiKeyRecord?.rateLimitWindowSec || 0);
+      const windowMs = windowSec > 0 ? windowSec * 1000 : 60_000;
+      const consumed = consumeRequest(apiKeyRecord.id, rateLimit, windowMs);
       if (!consumed.allowed) {
         const retrySec = Math.max(1, Math.ceil(consumed.retryAfterMs / 1000));
-        log.warn("AUTH", `API key rate limit ${consumed.current}/${consumed.limit} req/min`);
+        const windowLabel = windowSec > 0 ? `${windowSec}s` : "min";
+        log.warn("AUTH", `API key rate limit ${consumed.current}/${consumed.limit} req/${windowLabel}`);
         const response = errorResponse(
           HTTP_STATUS.RATE_LIMITED,
-          `API key rate limit exceeded (${consumed.current}/${consumed.limit} req/min)`
+          `API key rate limit exceeded (${consumed.current}/${consumed.limit} req/${windowLabel})`
         );
         response.headers.set("Retry-After", String(retrySec));
         response.headers.set("X-Api-Key-Rate-Limit", String(consumed.limit));
+        response.headers.set("X-Api-Key-Rate-Window", String(Math.round((consumed.windowMs || 60_000) / 1000)));
         response.headers.set("X-Api-Key-Rate-Remaining", "0");
         return response;
       }

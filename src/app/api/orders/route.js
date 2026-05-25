@@ -1,11 +1,19 @@
 import { NextResponse } from "next/server";
 import { getCurrentCustomer } from "@/lib/auth/customerSession";
-import { createOrder, getOrders, getPricingPlanById, getCustomerById, attachApibankOrder } from "@/lib/localDb";
+import {
+  createOrder,
+  getOrders,
+  getPricingPlanById,
+  getCustomerById,
+  attachApibankOrder,
+  purchasePlanWithWallet,
+  getSettings,
+} from "@/lib/localDb";
 import { recordFailure, checkLogin, getClientIp } from "@/lib/auth/loginThrottle";
-import { notifyAdminOrderCreated } from "@/lib/notify/telegram";
-import { sendOrderCreatedEmail } from "@/lib/notify/email";
-import { getSettings } from "@/lib/localDb";
+import { notifyAdminOrderCreated, notifyAdminOrderConfirmed, notifyCustomerKeyDelivered, resolvePublicUrl } from "@/lib/notify/telegram";
+import { sendOrderCreatedEmail, sendKeyDeliveredEmail } from "@/lib/notify/email";
 import { createApibankOrder } from "@/lib/payments/apibank";
+import { getConsistentMachineId } from "@/shared/utils/machineId";
 import { apiError } from "@/shared/utils/apiError";
 
 export const dynamic = "force-dynamic";
@@ -34,6 +42,7 @@ export async function POST(request) {
   const paymentMethod = body?.paymentMethod || "bank";
   const notes = body?.notes || null;
   const voucherCode = body?.voucherCode ? String(body.voucherCode).trim() : null;
+  const targetApiKeyId = body?.targetApiKeyId ? String(body.targetApiKeyId).trim() : null;
   if (!planId) return NextResponse.json({ error: "planId is required" }, { status: 400 });
 
   const plan = await getPricingPlanById(planId);
@@ -42,9 +51,62 @@ export async function POST(request) {
     return NextResponse.json({ error: "Gói không tồn tại hoặc đã ngừng bán" }, { status: 400 });
   }
 
+  // ── Wallet payment fast-path ─────────────────────────────────────────
+  // Atomic: debit wallet + provision key + mark order delivered. No QR,
+  // no APIBank round-trip. The response carries the raw key view-once so
+  // the order page can display it immediately.
+  if (paymentMethod === "wallet") {
+    let result;
+    try {
+      const machineId = targetApiKeyId ? null : await getConsistentMachineId();
+      result = await purchasePlanWithWallet({
+        customerId: session.customer.id,
+        planId,
+        voucherCode,
+        notes,
+        machineId,
+        targetApiKeyId,
+        actorIp: ip,
+      });
+    } catch (e) {
+      recordFailure(`orderCreate:${ip}`);
+      return apiError(e, "Mua bằng ví thất bại", 400, "orders/wallet");
+    }
+
+    // Fire-and-forget delivery notifications, mirroring the webhook flow.
+    (async () => {
+      try {
+        const portalUrl = await resolvePublicUrl("/store/account/keys");
+        if (result.apiKey?.key) {
+          await sendKeyDeliveredEmail({
+            email: session.customer.email,
+            displayName: session.customer.displayName,
+            planName: plan.name,
+            key: result.apiKey.key,
+            keyDisplay: result.apiKey.keyDisplay,
+            portalUrl,
+          }).catch((e) => console.log("[orders/wallet] email failed:", e.message));
+          await notifyCustomerKeyDelivered({
+            customer: session.customer,
+            planName: plan.name,
+            key: result.apiKey.key,
+            keyDisplay: result.apiKey.keyDisplay,
+            portalUrl,
+          }).catch((e) => console.log("[orders/wallet] tg failed:", e.message));
+        }
+        await notifyAdminOrderConfirmed({ order: result.order, customer: session.customer, planName: plan.name })
+          .catch((e) => console.log("[orders/wallet] tg admin failed:", e.message));
+      } catch (e) {
+        console.log("[orders/wallet] notify failed:", e.message);
+      }
+    })();
+
+    return NextResponse.json({ order: result.order, plan, apiKey: result.apiKey }, { status: 201 });
+  }
+
   let order;
   try {
-    order = await createOrder({ customerId: session.customer.id, planId, paymentMethod, notes, voucherCode });
+    order = await createOrder({ customerId: session.customer.id, planId, paymentMethod, notes, voucherCode, targetApiKeyId });
   } catch (e) {
     recordFailure(`orderCreate:${ip}`);
     return apiError(e, "Tạo đơn thất bại", 400, "orders/create");

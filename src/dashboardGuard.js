@@ -63,6 +63,10 @@ const PUBLIC_API_PATHS = [
   "/api/telegram/webhook",
   // APIBank webhook — verifies HMAC signature in the handler.
   "/api/webhooks/apibank",
+  // Public key-only endpoints (e.g. /api/public/key-usage) — auth handled
+  // in-handler via Authorization: Bearer <api-key>. Used by external dashboards
+  // such as the standalone Key Tracker app.
+  "/api/public",
 ];
 
 // Public top-level prefixes for LLM API endpoints with their own API key auth.

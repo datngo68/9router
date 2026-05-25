@@ -13,6 +13,22 @@ function fmtUsd(v) { return `$${Number(v || 0).toFixed(3)}`; }
 function fmtNum(v) { return Number(v || 0).toLocaleString("vi-VN"); }
 function fmtTime(s) { return s ? new Date(s).toLocaleString("vi-VN") : "—"; }
 
+function fmtWindow(sec) {
+  const s = Number(sec || 0);
+  if (s <= 0) return "phút"; // legacy default = 60s
+  if (s % 3600 === 0) return `${s / 3600}h`;
+  if (s % 60 === 0) return `${s / 60} phút`;
+  return `${s}s`;
+}
+
+const WINDOW_PRESETS = [
+  { label: "1 phút", sec: 60 },
+  { label: "5 phút", sec: 300 },
+  { label: "1 giờ", sec: 3600 },
+  { label: "5 giờ", sec: 18000 },
+  { label: "1 ngày", sec: 86400 },
+];
+
 const TABS = [
   { id: "overview", label: "Tổng quan" },
   { id: "orders", label: "Đơn hàng" },
@@ -875,7 +891,7 @@ function KeyRow({ k, usage, status, selected, onToggleSelect, onToggleActive, on
 
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-text-muted">
             <span>Hết hạn: {fmtTime(k.expiresAt)}</span>
-            <span>RPM: {k.requestsPerMinute || "∞"}</span>
+            <span>RPM: {k.requestsPerMinute ? `${k.requestsPerMinute}/${fmtWindow(k.rateLimitWindowSec)}` : "∞"}</span>
             <span>Max/req: {k.maxTokensPerRequest ? fmtNum(k.maxTokensPerRequest) : "∞"}</span>
             <span>Provider: {providerCount === 0 ? "Tất cả" : `${providerCount} đã chọn`}</span>
             <span>Models: {allowedModels.length === 0 ? "Tất cả" : `${allowedModels.length} đã chọn`}</span>
@@ -960,6 +976,63 @@ function ActionsTab({ onResetPassword }) {
   );
 }
 
+function RateLimitWindowField({ value, onChange, requestCount }) {
+  const sec = Number(value || 0);
+  const isCustom = sec > 0 && !WINDOW_PRESETS.some((p) => p.sec === sec);
+  const [customMode, setCustomMode] = useState(isCustom);
+
+  const summary = Number(requestCount) > 0
+    ? `≈ ${fmtNum(requestCount)} requests / ${sec > 0 ? fmtWindow(sec) : "phút"}`
+    : "Đang tắt rate limit (requests / window = 0)";
+
+  return (
+    <div className="rounded-lg border border-border-subtle p-3">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-sm font-medium">Rate limit window</span>
+        <span className="text-xs text-text-muted">{summary}</span>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        <button
+          type="button"
+          onClick={() => { setCustomMode(false); onChange(0); }}
+          className={`px-2.5 py-1 rounded text-xs border transition ${
+            sec === 0 && !customMode ? "bg-primary text-white border-primary" : "border-border text-text-muted hover:bg-surface-2"
+          }`}
+        >Mặc định (1 phút)</button>
+        {WINDOW_PRESETS.map((p) => (
+          <button
+            type="button"
+            key={p.sec}
+            onClick={() => { setCustomMode(false); onChange(p.sec); }}
+            className={`px-2.5 py-1 rounded text-xs border transition ${
+              sec === p.sec && !customMode ? "bg-primary text-white border-primary" : "border-border text-text-muted hover:bg-surface-2"
+            }`}
+          >{p.label}</button>
+        ))}
+        <button
+          type="button"
+          onClick={() => setCustomMode(true)}
+          className={`px-2.5 py-1 rounded text-xs border transition ${
+            customMode ? "bg-primary text-white border-primary" : "border-border text-text-muted hover:bg-surface-2"
+          }`}
+        >Custom</button>
+      </div>
+      {customMode && (
+        <div className="mt-2">
+          <Input
+            type="number"
+            min={1}
+            value={sec}
+            onChange={(e) => onChange(Number(e.target.value) || 0)}
+            placeholder="Số giây"
+            hint="VD 18000 = 5 giờ, 600 = 10 phút"
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function EditKeyModal({ modal, customerId, onClose, onSaved, onError }) {
   const [tab, setTab] = useState("limits");
   const [form, setForm] = useState(null);
@@ -979,6 +1052,7 @@ function EditKeyModal({ modal, customerId, onClose, onSaved, onError }) {
       lifetimeTokenLimit: k.lifetimeTokenLimit || 0,
       requestsPerMinute: k.requestsPerMinute || 0,
       maxTokensPerRequest: k.maxTokensPerRequest || 0,
+      rateLimitWindowSec: k.rateLimitWindowSec || 0,
       expiresAt: k.expiresAt ? k.expiresAt.slice(0, 16) : "",
       allowedModelsText: (k.allowedModels || []).join("\n"),
       allowedProviders: k.allowedProviders || [],
@@ -1034,6 +1108,7 @@ function EditKeyModal({ modal, customerId, onClose, onSaved, onError }) {
       lifetimeTokenLimit: Number(form.lifetimeTokenLimit) || 0,
       requestsPerMinute: Number(form.requestsPerMinute) || 0,
       maxTokensPerRequest: Number(form.maxTokensPerRequest) || 0,
+      rateLimitWindowSec: Number(form.rateLimitWindowSec) || 0,
       expiresAt,
       allowedModels,
     }, "Đã lưu limits.");
@@ -1135,9 +1210,15 @@ function EditKeyModal({ modal, customerId, onClose, onSaved, onError }) {
               </div>
 
               <div className="grid grid-cols-2 gap-3">
-                <Input label="Requests / phút" type="number" min={0} value={form.requestsPerMinute} onChange={(e) => setForm({ ...form, requestsPerMinute: e.target.value })} hint="0 = ∞" />
+                <Input label="Số requests / window" type="number" min={0} value={form.requestsPerMinute} onChange={(e) => setForm({ ...form, requestsPerMinute: e.target.value })} hint="0 = ∞" />
                 <Input label="Max tokens / request" type="number" min={0} value={form.maxTokensPerRequest} onChange={(e) => setForm({ ...form, maxTokensPerRequest: e.target.value })} hint="0 = ∞" />
               </div>
+
+              <RateLimitWindowField
+                value={form.rateLimitWindowSec}
+                onChange={(v) => setForm({ ...form, rateLimitWindowSec: v })}
+                requestCount={form.requestsPerMinute}
+              />
 
               <div className="grid grid-cols-2 gap-3 items-end">
                 <Input label="Hết hạn (set tường minh)" type="datetime-local" value={form.expiresAt} onChange={(e) => setForm({ ...form, expiresAt: e.target.value })} hint="Để trống = không bao giờ hết" />
@@ -1392,15 +1473,18 @@ function ExpiryModal({ modal, onClose, onSave }) {
 function RateLimitModal({ modal, onClose, onSave }) {
   const [requestsPerMinute, setRpm] = useState(0);
   const [maxTokensPerRequest, setMaxTok] = useState(0);
+  const [rateLimitWindowSec, setWindow] = useState(0);
 
   useEffect(() => {
     if (!modal) return;
     if (modal.key) {
       setRpm(modal.key.requestsPerMinute || 0);
       setMaxTok(modal.key.maxTokensPerRequest || 0);
+      setWindow(modal.key.rateLimitWindowSec || 0);
     } else {
       setRpm(0);
       setMaxTok(0);
+      setWindow(0);
     }
   }, [modal]);
 
@@ -1414,6 +1498,7 @@ function RateLimitModal({ modal, onClose, onSave }) {
     const out = {};
     if (requestsPerMinute !== "" && Number(requestsPerMinute) >= 0) out.requestsPerMinute = Number(requestsPerMinute);
     if (maxTokensPerRequest !== "" && Number(maxTokensPerRequest) >= 0) out.maxTokensPerRequest = Number(maxTokensPerRequest);
+    if (Number(rateLimitWindowSec) >= 0) out.rateLimitWindowSec = Number(rateLimitWindowSec);
     if (Object.keys(out).length === 0) return;
     onSave(out);
   }
@@ -1421,9 +1506,10 @@ function RateLimitModal({ modal, onClose, onSave }) {
   return (
     <Modal isOpen={!!modal} onClose={onClose} title={title}>
       <div className="flex flex-col gap-4">
-        <p className="text-xs text-text-muted">Đặt 0 để không giới hạn.</p>
-        <Input label="Requests / phút" type="number" min={0} value={requestsPerMinute} onChange={(e) => setRpm(e.target.value)} />
+        <p className="text-xs text-text-muted">Đặt 0 để không giới hạn. Window mặc định 1 phút nếu không chọn preset.</p>
+        <Input label="Số requests / window" type="number" min={0} value={requestsPerMinute} onChange={(e) => setRpm(e.target.value)} />
         <Input label="Max tokens / request" type="number" min={0} value={maxTokensPerRequest} onChange={(e) => setMaxTok(e.target.value)} />
+        <RateLimitWindowField value={rateLimitWindowSec} onChange={setWindow} requestCount={requestsPerMinute} />
         <div className="flex gap-2">
           <Button onClick={submit} fullWidth>Áp dụng</Button>
           <Button onClick={onClose} variant="ghost" fullWidth>Hủy</Button>

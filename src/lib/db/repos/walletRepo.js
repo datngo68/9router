@@ -212,6 +212,152 @@ export async function getWalletDailyStats({ days = 30, type = null } = {}) {
 }
 
 /**
+ * Aggregate totals across the wallet ledger over a window. Returns micro-VND
+ * sums grouped by transaction `type` (topup / charge / planPurchase / refund /
+ * adjustment / etc.) so the admin overview can show "tổng nạp", "tổng tiêu"
+ * etc. without re-scanning the table.
+ */
+export async function getWalletTotals({ days = 30 } = {}) {
+  const db = await getAdapter();
+  const cutoff = new Date(Date.now() - Math.max(1, Number(days) || 30) * 86400000).toISOString();
+  const rows = db.all(
+    `SELECT type,
+            COALESCE(SUM(CASE WHEN delta > 0 THEN delta ELSE 0 END), 0) AS creditMicro,
+            COALESCE(SUM(CASE WHEN delta < 0 THEN -delta ELSE 0 END), 0) AS debitMicro,
+            COUNT(*) AS count
+       FROM walletTransactions
+      WHERE createdAt >= ?
+      GROUP BY type
+      ORDER BY type ASC`,
+    [cutoff]
+  );
+  return rows.map((r) => ({
+    type: r.type,
+    creditMicroVnd: Number(r.creditMicro || 0),
+    debitMicroVnd: Number(r.debitMicro || 0),
+    count: Number(r.count || 0),
+  }));
+}
+
+/**
+ * Snapshot of currently held balances. Used by admin overview to track total
+ * float and customer concentration. Only returns customers with non-zero
+ * balance OR balanceMinLimit (overdraft floor) to keep the list short on
+ * deployments with thousands of dormant customers.
+ */
+export async function getWalletBalanceSnapshot({ limit = 50 } = {}) {
+  const db = await getAdapter();
+  const totals = db.get(
+    `SELECT
+        COALESCE(SUM(CASE WHEN balance > 0 THEN balance ELSE 0 END), 0) AS positiveMicro,
+        COALESCE(SUM(CASE WHEN balance < 0 THEN -balance ELSE 0 END), 0) AS negativeMicro,
+        COUNT(CASE WHEN balance > 0 THEN 1 END) AS positiveCount,
+        COUNT(CASE WHEN balance < 0 THEN 1 END) AS negativeCount,
+        COUNT(*) AS totalCustomers
+       FROM customers`
+  );
+  const top = db.all(
+    `SELECT id, email, displayName, balance, balanceMinLimit, updatedAt
+       FROM customers
+      WHERE balance != 0 OR balanceMinLimit != 0
+      ORDER BY balance DESC
+      LIMIT ?`,
+    [Math.max(1, Math.min(500, Number(limit) || 50))]
+  );
+  return {
+    positiveMicroVnd: Number(totals?.positiveMicro || 0),
+    negativeMicroVnd: Number(totals?.negativeMicro || 0),
+    positiveCount: Number(totals?.positiveCount || 0),
+    negativeCount: Number(totals?.negativeCount || 0),
+    totalCustomers: Number(totals?.totalCustomers || 0),
+    top: top.map((r) => ({
+      id: r.id,
+      email: r.email,
+      displayName: r.displayName,
+      balanceMicroVnd: Number(r.balance || 0),
+      balanceMinLimitMicroVnd: Number(r.balanceMinLimit || 0),
+      updatedAt: r.updatedAt,
+    })),
+  };
+}
+
+/**
+ * Top customers by activity in the period. Caller picks the metric:
+ *   - "topup"        sum of credits with type='topup'
+ *   - "charge"       sum of debits with type='charge' (PAYG burn)
+ *   - "planPurchase" sum of debits with type='planPurchase'
+ *   - "spend"        sum of all debits regardless of type
+ */
+export async function getTopWalletCustomers({ days = 30, metric = "spend", limit = 10 } = {}) {
+  const db = await getAdapter();
+  const cutoff = new Date(Date.now() - Math.max(1, Number(days) || 30) * 86400000).toISOString();
+  let whereType = "";
+  let valueExpr = "";
+  if (metric === "topup") {
+    whereType = "AND wt.type = 'topup'";
+    valueExpr = "SUM(CASE WHEN wt.delta > 0 THEN wt.delta ELSE 0 END)";
+  } else if (metric === "charge") {
+    whereType = "AND wt.type = 'charge'";
+    valueExpr = "SUM(CASE WHEN wt.delta < 0 THEN -wt.delta ELSE 0 END)";
+  } else if (metric === "planPurchase") {
+    whereType = "AND wt.type = 'planPurchase'";
+    valueExpr = "SUM(CASE WHEN wt.delta < 0 THEN -wt.delta ELSE 0 END)";
+  } else {
+    valueExpr = "SUM(CASE WHEN wt.delta < 0 THEN -wt.delta ELSE 0 END)";
+  }
+  const rows = db.all(
+    `SELECT wt.customerId AS id, c.email, c.displayName, c.balance,
+            ${valueExpr} AS value, COUNT(*) AS count
+       FROM walletTransactions wt
+       LEFT JOIN customers c ON c.id = wt.customerId
+      WHERE wt.createdAt >= ? ${whereType}
+      GROUP BY wt.customerId
+     HAVING value > 0
+      ORDER BY value DESC
+      LIMIT ?`,
+    [cutoff, Math.max(1, Math.min(100, Number(limit) || 10))]
+  );
+  return rows.map((r) => ({
+    customerId: r.id,
+    email: r.email || r.id,
+    displayName: r.displayName || null,
+    valueMicroVnd: Number(r.value || 0),
+    count: Number(r.count || 0),
+    balanceMicroVnd: Number(r.balance || 0),
+  }));
+}
+
+/**
+ * Top models by PAYG burn over the period. Used for admin product analytics
+ * (which models bring in the most VND).
+ */
+export async function getTopWalletModels({ days = 30, limit = 10 } = {}) {
+  const db = await getAdapter();
+  const cutoff = new Date(Date.now() - Math.max(1, Number(days) || 30) * 86400000).toISOString();
+  const rows = db.all(
+    `SELECT provider, model,
+            COALESCE(SUM(CASE WHEN delta < 0 THEN -delta ELSE 0 END), 0) AS debitMicro,
+            SUM(promptTokens) AS prompt,
+            SUM(completionTokens) AS completion,
+            COUNT(*) AS count
+       FROM walletTransactions
+      WHERE createdAt >= ? AND type = 'charge' AND model IS NOT NULL
+      GROUP BY provider, model
+      ORDER BY debitMicro DESC
+      LIMIT ?`,
+    [cutoff, Math.max(1, Math.min(100, Number(limit) || 10))]
+  );
+  return rows.map((r) => ({
+    provider: r.provider || "?",
+    model: r.model || "?",
+    debitMicroVnd: Number(r.debitMicro || 0),
+    promptTokens: Number(r.prompt || 0),
+    completionTokens: Number(r.completion || 0),
+    count: Number(r.count || 0),
+  }));
+}
+
+/**
  * Look up a transaction by id (admin detail view).
  */
 export async function getWalletTransactionById(id) {

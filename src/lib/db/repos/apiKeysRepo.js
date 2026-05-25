@@ -86,6 +86,7 @@ export function normalizeApiKeyPolicy(data = {}) {
     lifetimeTokenLimit: normalizeNonNegativeInt(data.lifetimeTokenLimit),
     requestsPerMinute: normalizeNonNegativeInt(data.requestsPerMinute),
     maxTokensPerRequest: normalizeNonNegativeInt(data.maxTokensPerRequest),
+    rateLimitWindowSec: normalizeNonNegativeInt(data.rateLimitWindowSec),
     expiresAt: normalizeExpiresAt(data.expiresAt),
     allowedModels: normalizeAllowedModels(data.allowedModels),
     allowedIps: normalizeAllowedIps(data.allowedIps),
@@ -131,6 +132,7 @@ function rowToKey(row) {
     lifetimeTokenLimit: normalizeNonNegativeInt(row.lifetimeTokenLimit),
     requestsPerMinute: normalizeNonNegativeInt(row.requestsPerMinute),
     maxTokensPerRequest: normalizeNonNegativeInt(row.maxTokensPerRequest),
+    rateLimitWindowSec: normalizeNonNegativeInt(row.rateLimitWindowSec),
     expiresAt: normalizeExpiresAt(row.expiresAt),
     allowedModels: normalizeAllowedModels(row.allowedModels),
     allowedIps: normalizeAllowedIps(row.allowedIps),
@@ -141,6 +143,7 @@ function rowToKey(row) {
     allowedConnectionIds: normalizeAllowedConnectionIds(row.allowedConnectionIds),
     customerId: row.customerId || null,
     orderId: row.orderId || null,
+    quotaResetAt: row.quotaResetAt || null,
     createdAt: row.createdAt,
   };
 }
@@ -198,7 +201,7 @@ export async function createApiKey(name, machineId, options = {}) {
     createdAt: new Date().toISOString(),
   };
   db.run(
-    `INSERT INTO apiKeys(id, key, keyHash, keyPrefix, keyLast4, name, machineId, isActive, dailyTokenLimit, monthlyTokenLimit, lifetimeTokenLimit, requestsPerMinute, maxTokensPerRequest, expiresAt, allowedModels, allowedIps, rtkMode, cavemanMode, paygEnabled, allowedProviders, allowedConnectionIds, createdAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO apiKeys(id, key, keyHash, keyPrefix, keyLast4, name, machineId, isActive, dailyTokenLimit, monthlyTokenLimit, lifetimeTokenLimit, requestsPerMinute, maxTokensPerRequest, rateLimitWindowSec, expiresAt, allowedModels, allowedIps, rtkMode, cavemanMode, paygEnabled, allowedProviders, allowedConnectionIds, createdAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       apiKey.id,
       null, // never persist plaintext
@@ -213,6 +216,7 @@ export async function createApiKey(name, machineId, options = {}) {
       apiKey.lifetimeTokenLimit,
       apiKey.requestsPerMinute,
       apiKey.maxTokensPerRequest,
+      apiKey.rateLimitWindowSec,
       apiKey.expiresAt,
       stringifyJson(apiKey.allowedModels),
       stringifyJson(apiKey.allowedIps),
@@ -246,6 +250,9 @@ export async function updateApiKey(id, data) {
     if (Object.prototype.hasOwnProperty.call(data, "maxTokensPerRequest")) {
       policyPatch.maxTokensPerRequest = normalizeNonNegativeInt(data.maxTokensPerRequest);
     }
+    if (Object.prototype.hasOwnProperty.call(data, "rateLimitWindowSec")) {
+      policyPatch.rateLimitWindowSec = normalizeNonNegativeInt(data.rateLimitWindowSec);
+    }
     if (Object.prototype.hasOwnProperty.call(data, "expiresAt")) {
       policyPatch.expiresAt = normalizeExpiresAt(data.expiresAt);
     }
@@ -272,7 +279,7 @@ export async function updateApiKey(id, data) {
     }
     const merged = { ...existing, ...data, ...policyPatch };
     db.run(
-      `UPDATE apiKeys SET name = ?, machineId = ?, isActive = ?, dailyTokenLimit = ?, monthlyTokenLimit = ?, lifetimeTokenLimit = ?, requestsPerMinute = ?, maxTokensPerRequest = ?, expiresAt = ?, allowedModels = ?, allowedIps = ?, rtkMode = ?, cavemanMode = ?, paygEnabled = ?, allowedProviders = ?, allowedConnectionIds = ? WHERE id = ?`,
+      `UPDATE apiKeys SET name = ?, machineId = ?, isActive = ?, dailyTokenLimit = ?, monthlyTokenLimit = ?, lifetimeTokenLimit = ?, requestsPerMinute = ?, maxTokensPerRequest = ?, rateLimitWindowSec = ?, expiresAt = ?, allowedModels = ?, allowedIps = ?, rtkMode = ?, cavemanMode = ?, paygEnabled = ?, allowedProviders = ?, allowedConnectionIds = ? WHERE id = ?`,
       [
         merged.name,
         merged.machineId,
@@ -282,6 +289,7 @@ export async function updateApiKey(id, data) {
         merged.lifetimeTokenLimit,
         merged.requestsPerMinute,
         merged.maxTokensPerRequest,
+        merged.rateLimitWindowSec,
         merged.expiresAt,
         stringifyJson(merged.allowedModels),
         stringifyJson(merged.allowedIps),
@@ -437,6 +445,9 @@ export async function bulkUpdateApiKeys(ids, patch) {
       if (Object.prototype.hasOwnProperty.call(patch, "maxTokensPerRequest")) {
         policyPatch.maxTokensPerRequest = normalizeNonNegativeInt(patch.maxTokensPerRequest);
       }
+      if (Object.prototype.hasOwnProperty.call(patch, "rateLimitWindowSec")) {
+        policyPatch.rateLimitWindowSec = normalizeNonNegativeInt(patch.rateLimitWindowSec);
+      }
       if (Object.prototype.hasOwnProperty.call(patch, "expiresAt")) {
         policyPatch.expiresAt = normalizeExpiresAt(patch.expiresAt);
       }
@@ -463,7 +474,7 @@ export async function bulkUpdateApiKeys(ids, patch) {
       }
       const merged = { ...existing, ...patch, ...policyPatch };
       db.run(
-        `UPDATE apiKeys SET name = ?, machineId = ?, isActive = ?, dailyTokenLimit = ?, monthlyTokenLimit = ?, lifetimeTokenLimit = ?, requestsPerMinute = ?, maxTokensPerRequest = ?, expiresAt = ?, allowedModels = ?, allowedIps = ?, rtkMode = ?, cavemanMode = ?, paygEnabled = ?, allowedProviders = ?, allowedConnectionIds = ? WHERE id = ?`,
+        `UPDATE apiKeys SET name = ?, machineId = ?, isActive = ?, dailyTokenLimit = ?, monthlyTokenLimit = ?, lifetimeTokenLimit = ?, requestsPerMinute = ?, maxTokensPerRequest = ?, rateLimitWindowSec = ?, expiresAt = ?, allowedModels = ?, allowedIps = ?, rtkMode = ?, cavemanMode = ?, paygEnabled = ?, allowedProviders = ?, allowedConnectionIds = ? WHERE id = ?`,
         [
           merged.name,
           merged.machineId,
@@ -473,6 +484,7 @@ export async function bulkUpdateApiKeys(ids, patch) {
           merged.lifetimeTokenLimit,
           merged.requestsPerMinute,
           merged.maxTokensPerRequest,
+          merged.rateLimitWindowSec,
           merged.expiresAt,
           stringifyJson(merged.allowedModels),
           stringifyJson(merged.allowedIps),
@@ -525,6 +537,9 @@ export async function bulkUpdateApiKeysWith(ids, buildPatch) {
       if (Object.prototype.hasOwnProperty.call(patch, "maxTokensPerRequest")) {
         policyPatch.maxTokensPerRequest = normalizeNonNegativeInt(patch.maxTokensPerRequest);
       }
+      if (Object.prototype.hasOwnProperty.call(patch, "rateLimitWindowSec")) {
+        policyPatch.rateLimitWindowSec = normalizeNonNegativeInt(patch.rateLimitWindowSec);
+      }
       if (Object.prototype.hasOwnProperty.call(patch, "expiresAt")) {
         policyPatch.expiresAt = normalizeExpiresAt(patch.expiresAt);
       }
@@ -551,7 +566,7 @@ export async function bulkUpdateApiKeysWith(ids, buildPatch) {
       }
       const merged = { ...existing, ...patch, ...policyPatch };
       db.run(
-        `UPDATE apiKeys SET name = ?, machineId = ?, isActive = ?, dailyTokenLimit = ?, monthlyTokenLimit = ?, lifetimeTokenLimit = ?, requestsPerMinute = ?, maxTokensPerRequest = ?, expiresAt = ?, allowedModels = ?, allowedIps = ?, rtkMode = ?, cavemanMode = ?, paygEnabled = ?, allowedProviders = ?, allowedConnectionIds = ? WHERE id = ?`,
+        `UPDATE apiKeys SET name = ?, machineId = ?, isActive = ?, dailyTokenLimit = ?, monthlyTokenLimit = ?, lifetimeTokenLimit = ?, requestsPerMinute = ?, maxTokensPerRequest = ?, rateLimitWindowSec = ?, expiresAt = ?, allowedModels = ?, allowedIps = ?, rtkMode = ?, cavemanMode = ?, paygEnabled = ?, allowedProviders = ?, allowedConnectionIds = ? WHERE id = ?`,
         [
           merged.name,
           merged.machineId,
@@ -561,6 +576,7 @@ export async function bulkUpdateApiKeysWith(ids, buildPatch) {
           merged.lifetimeTokenLimit,
           merged.requestsPerMinute,
           merged.maxTokensPerRequest,
+          merged.rateLimitWindowSec,
           merged.expiresAt,
           stringifyJson(merged.allowedModels),
           stringifyJson(merged.allowedIps),

@@ -123,6 +123,10 @@ export async function POST(request) {
         const n = nonNeg(payload.maxTokensPerRequest);
         if (n != null) patch.maxTokensPerRequest = n;
       }
+      if (payload.rateLimitWindowSec !== undefined && payload.rateLimitWindowSec !== "") {
+        const n = nonNeg(payload.rateLimitWindowSec);
+        if (n != null) patch.rateLimitWindowSec = n;
+      }
       if (Object.keys(patch).length === 0) {
         return NextResponse.json({ error: "no rate-limit fields supplied" }, { status: 400 });
       }

@@ -31,7 +31,7 @@ export {
   validateVoucherForOrder, redeemVoucherInTxn,
   getRedemptionsForVoucher,
   createOrder, createTopupOrder, getOrderById, getOrders,
-  cancelOrder, markOrderRefunded, confirmOrderAtomic,
+  cancelOrder, markOrderRefunded, confirmOrderAtomic, purchasePlanWithWallet,
   attachApibankOrder, findOrderByApibankRef,
   countCustomerPlanPurchases,
   exportDb, importDb,
